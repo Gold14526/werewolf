@@ -10,3 +10,9 @@ coverage/
 *.zip
 wrangler.generated.json
 .wrangler/
+data/
+backups/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*

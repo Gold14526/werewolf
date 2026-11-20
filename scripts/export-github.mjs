@@ -36,7 +36,7 @@ try {
 const directories = ['web', 'worker', 'server', 'scripts', 'tests', 'db', 'drizzle', '.github', 'docs'];
 const rootFiles = [
   'package.json', 'package-lock.json', 'README.md', 'LICENSE',
-  'Dockerfile', 'render.yaml', 'drizzle.config.ts', '.gitignore', '.env.example',
+  'Dockerfile', 'compose.yaml', 'render.yaml', 'drizzle.config.ts', '.gitignore', '.dockerignore', '.env.example',
   'wrangler.example.json', 'wrangler.example.jsonc', 'wrangler.jsonc.example',
 ];
 const excluded = new Set(['.git', '.openai', 'node_modules', 'dist', 'coverage', '.wrangler', '.DS_Store']);

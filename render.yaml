@@ -1,11 +1,24 @@
 services:
   - type: web
     name: moonwolf
-    runtime: docker
+    runtime: node
     plan: starter
+    numInstances: 1
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.mjs
     healthCheckPath: /api/health
+    disk:
+      name: moonwolf-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: NODE_VERSION
+        value: "24"
       - key: PORT
         value: "3000"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: DATABASE_PATH
+        value: /var/data/moonwolf.sqlite
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: https://gold14526.github.io

@@ -4,7 +4,7 @@ import { createApp } from '../server/index.mjs';
 
 const config = { roles: { wolf: 2, villager: 2, seer: 1, witch: 1, hunter: 0, guard: 0 }, victory: 'side', nightSeconds: 30, daySeconds: 60 };
 async function setup(t, options = {}) {
-  const app = createApp({ disableRateLimits: true, ...options });
+  const app = createApp({ databasePath: ':memory:', disableRateLimits: true, ...options });
   await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
   t.after(() => app.close());
   const origin = `http://127.0.0.1:${app.server.address().port}`;

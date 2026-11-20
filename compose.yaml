@@ -1,0 +1,17 @@
+services:
+  moonwolf:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DATABASE_PATH: /var/data/moonwolf.sqlite
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://gold14526.github.io}
+    volumes:
+      - moonwolf-data:/var/data
+    stop_grace_period: 20s
+
+volumes:
+  moonwolf-data:

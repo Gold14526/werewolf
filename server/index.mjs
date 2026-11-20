@@ -1,9 +1,11 @@
 import http from 'node:http';
 import { randomBytes, randomInt } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat } from '../web/engine.js';
+import { openPersistence } from './persistence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon' };
@@ -18,8 +20,17 @@ const cleanName = (value, fallback, maxLength = 16) => {
   if (!text || [...text].length > maxLength || /[\u0000-\u001f\u007f]/u.test(text)) throw fail(`名称需为 1–${maxLength} 个字符`);
   return text;
 };
+function canonicalFile(file) {
+  try { return realpathSync(file); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const parent = path.dirname(file);
+    if (parent === file) throw error;
+    return path.join(canonicalFile(parent), path.basename(file));
+  }
+}
 
-/** In-memory single-process game server. Call app.close() during tests/shutdown. */
+/** SQLite-backed single-process server. Confirmed operations are durable before HTTP success. */
 export function createApp(options = {}) {
   const sessions = new Map();
   const rooms = new Map();
@@ -30,7 +41,88 @@ export function createApp(options = {}) {
   const clock = options.now ?? Date.now;
   const maxRooms = options.maxRooms ?? 1000;
   const maxSessions = options.maxSessions ?? 10000;
+  let databasePath = options.databasePath ?? process.env.DATABASE_PATH ?? path.resolve(ROOT, '../data/moonwolf.sqlite');
+  if (typeof databasePath !== 'string' || !databasePath.trim()) throw new Error('DATABASE_PATH must name a writable SQLite file');
+  if (databasePath !== ':memory:') {
+    databasePath = canonicalFile(path.resolve(databasePath));
+    const staticRoot = realpathSync(ROOT);
+    if (databasePath === staticRoot || databasePath.startsWith(staticRoot + path.sep)) {
+      throw new Error('DATABASE_PATH must be outside the public web directory');
+    }
+  }
+  const persistence = openPersistence(databasePath);
+  let storageFailure = null;
   let lastCleanup = 0;
+
+  function snapshot() {
+    return structuredClone({
+      version: 1,
+      sessions: [...sessions],
+      rooms: [...rooms].map(([code, room]) => [code, { ...room, players: room.players.map(({ session, ...player }) => ({ ...player, sessionId: session.id })) }]),
+      histories: [...histories], standings: [...standings],
+    });
+  }
+  function restore(saved) {
+    if (saved?.version !== 1 || !['sessions', 'rooms', 'histories', 'standings'].every(key => Array.isArray(saved[key]))) {
+      throw new Error('Unsupported or corrupt Moonwolf database snapshot');
+    }
+    const restoredSessions = new Map(saved.sessions);
+    const sessionsById = new Map([...restoredSessions.values()].map(session => [session.id, session]));
+    const restoredRooms = new Map(saved.rooms.map(([code, room]) => [code, {
+      ...room,
+      players: room.players.map(({ sessionId, ...player }) => {
+        const session = sessionsById.get(sessionId);
+        if (!session || session.id !== player.id) throw new Error('Database room references a missing session');
+        return { ...player, session };
+      }),
+    }]));
+    for (const [target, source] of [[sessions, restoredSessions], [rooms, restoredRooms], [histories, saved.histories], [standings, saved.standings]]) {
+      target.clear();
+      for (const [key, value] of source) target.set(key, value);
+    }
+  }
+  function storageUnavailable(error) {
+    if (!storageFailure) console.error('Durable storage failed:', error.message);
+    storageFailure ??= fail('持久化存储不可用，操作未确认；请修复存储并重启服务', 503);
+    return storageFailure;
+  }
+  function ensureStorage() {
+    if (storageFailure) throw storageFailure;
+    try { persistence.assertCurrent(); } catch (error) { throw storageUnavailable(error); }
+  }
+  function checkpoint(now = clock()) {
+    if (storageFailure) throw storageFailure;
+    try { persistence.save(snapshot(), now); } catch (error) { throw storageUnavailable(error); }
+  }
+  function transaction(action) {
+    ensureStorage();
+    const before = snapshot();
+    try { const result = action(); checkpoint(); return result; }
+    catch (error) { restore(before); throw error; }
+  }
+  try {
+    if (persistence.loaded) {
+      restore(persistence.loaded.snapshot);
+      const now = clock();
+      const paused = Math.max(0, now - persistence.loaded.savedAt);
+      // Freeze offline time at the last durable checkpoint. Historical timestamps
+      // remain unchanged; only expiry clocks and the current stage are resumed.
+      for (const session of sessions.values()) {
+        session.lastSeen += paused;
+        session.recoveryUntil = now + 2 * MINUTE;
+      }
+      for (const room of rooms.values()) {
+        room.lastActive += paused;
+        room.recoveryUntil = now + 2 * MINUTE;
+        if (room.game && room.game.phase !== 'finished') {
+          room.game.deadline = now + Math.max(30 * SECOND, room.game.deadline - persistence.loaded.savedAt);
+        }
+      }
+    }
+    // Claim a new revision on startup. Another process holding an older
+    // snapshot can no longer write it over this instance's state.
+    checkpoint();
+  } catch (error) { persistence.close(); throw error; }
 
   function rate(key, count, window, now) {
     if (options.disableRateLimits) return;
@@ -42,7 +134,7 @@ export function createApp(options = {}) {
   function sessionFor(req, now) {
     const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
     const session = token && sessions.get(token);
-    if (!session || now - session.lastSeen > 24 * HOUR) throw fail('登录状态已过期，请重新填写昵称', 401);
+    if (!session || (now >= (session.recoveryUntil ?? 0) && now - session.lastSeen > 24 * HOUR)) throw fail('登录状态已过期，请重新填写昵称', 401);
     session.lastSeen = now;
     rate(`user:${session.id}`, 240, MINUTE, now);
     return session;
@@ -168,21 +260,22 @@ export function createApp(options = {}) {
       if (room.game && room.game.phase !== 'finished') advance(room.game, now);
       recordFinished(room, now);
       const lastSeen = Math.max(room.lastActive, ...room.players.map(p => p.session.lastSeen));
-      if (now - lastSeen > 30 * MINUTE) {
+      if (now >= (room.recoveryUntil ?? 0) && now - lastSeen > 30 * MINUTE) {
         for (const player of room.players) if (player.session.roomCode === room.code) player.session.roomCode = null;
         rooms.delete(room.code);
       } else if (!room.game) {
-        for (const player of [...room.players]) if (now - player.session.lastSeen > 2 * MINUTE) dropMember(room, player.session);
+        for (const player of [...room.players]) if (now >= (player.session.recoveryUntil ?? 0) && now - player.session.lastSeen > 2 * MINUTE) dropMember(room, player.session);
       }
     }
     if (now - lastCleanup > MINUTE) {
-      for (const [token, session] of sessions) if (now - session.lastSeen > 24 * HOUR) sessions.delete(token);
+      for (const [token, session] of sessions) if (!rooms.has(session.roomCode) && now >= (session.recoveryUntil ?? 0) && now - session.lastSeen > 24 * HOUR) sessions.delete(token);
       for (const [key, bucket] of limits) if (now >= bucket.until) limits.delete(key);
       lastCleanup = now;
     }
   }
   const timer = setInterval(() => {
-    try { cleanup(clock()); } catch (error) { console.error('Game timer failed:', error.message); }
+    if (storageFailure) return;
+    try { transaction(() => cleanup(clock())); } catch (error) { console.error('Game timer failed:', error.message); }
   }, SECOND);
   timer.unref();
 
@@ -208,8 +301,16 @@ export function createApp(options = {}) {
   async function handler(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    let pendingSnapshot = null;
+    const respond = (status, body) => {
+      // No await is permitted between snapshotting state, mutating it and this
+      // synchronous commit: concurrent HTTP bodies cannot interleave updates.
+      checkpoint();
+      pendingSnapshot = null;
+      return send(res, status, body);
+    };
     try {
-      const now = clock();
+      let now = clock();
       const url = new URL(req.url, 'http://localhost');
       const isApi = url.pathname.startsWith('/api/');
       if (isApi) {
@@ -225,9 +326,13 @@ export function createApp(options = {}) {
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
         res.setHeader('Access-Control-Max-Age', '600');
         if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+        ensureStorage();
         rate(`ip:${req.socket.remoteAddress}`, 2400, MINUTE, now);
         if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true, version: 1, service: 'moonwolf' });
         const body = req.method === 'POST' ? await readBody(req) : {};
+        ensureStorage();
+        now = clock();
+        pendingSnapshot = snapshot();
         if (req.method === 'POST' && url.pathname === '/api/session') {
           if (req.headers.authorization) {
             const session = sessionFor(req, now);
@@ -237,7 +342,7 @@ export function createApp(options = {}) {
             session.name = name;
             if (room && !room.game) room.players.find(p => p.id === session.id).name = name;
             if (standings.has(session.id)) standings.get(session.id).name = name;
-            return send(res, 200, { token: req.headers.authorization.slice(7), player: { id: session.id, name } });
+            return respond(200, { token: req.headers.authorization.slice(7), player: { id: session.id, name } });
           }
           rate(`session:${req.socket.remoteAddress}`, 60, HOUR, now);
           if (sessions.size >= maxSessions) throw fail('服务器人数已满，请稍后再试', 503);
@@ -245,26 +350,26 @@ export function createApp(options = {}) {
           const token = randomBytes(32).toString('base64url');
           const session = { id: randomBytes(12).toString('hex'), name, roomCode: null, createdAt: now, lastSeen: now };
           sessions.set(token, session);
-          return send(res, 201, { token, player: { id: session.id, name } });
+          return respond(201, { token, player: { id: session.id, name } });
         }
         const session = sessionFor(req, now);
         if (req.method === 'POST') rate(`write:${session.id}`, 90, MINUTE, now);
         let room = currentRoom(session, false);
         if (room) { room.lastActive = now; if (room.game) advance(room.game, now); recordFinished(room, now); }
-        if (req.method === 'GET' && url.pathname === '/api/room') return send(res, 200, { room: serialize(room, session, now) });
+        if (req.method === 'GET' && url.pathname === '/api/room') return respond(200, { room: serialize(room, session, now) });
         if (req.method === 'GET' && url.pathname === '/api/rooms') {
-          return send(res, 200, { rooms: [...rooms.values()].filter(r => r.visibility === 'public' && !r.game).slice(0, 100).map(r => ({ code: r.code, name: r.name, playerCount: r.players.length, capacity: capacity(r), config: r.config, phase: 'waiting', matchmaking: r.matchmaking })) });
+          return respond(200, { rooms: [...rooms.values()].filter(r => r.visibility === 'public' && !r.game).slice(0, 100).map(r => ({ code: r.code, name: r.name, playerCount: r.players.length, capacity: capacity(r), config: r.config, phase: 'waiting', matchmaking: r.matchmaking })) });
         }
         if (req.method === 'GET' && url.pathname === '/api/history') {
-          return send(res, 200, { history: [...histories.values()].filter(h => visibleHistory(h, session)).reverse().map(h => ({ code: h.code, name: h.name, winner: h.game.winner, round: h.game.round, endedAt: h.endedAt })) });
+          return respond(200, { history: [...histories.values()].filter(h => visibleHistory(h, session)).reverse().map(h => ({ code: h.code, name: h.name, winner: h.game.winner, round: h.game.round, endedAt: h.endedAt })) });
         }
         if (req.method === 'GET' && /^\/api\/history\/\d{6}$/.test(url.pathname)) {
           const history = histories.get(url.pathname.split('/').pop());
           if (!history || !visibleHistory(history, session)) throw fail('对局记录不存在', 404);
-          return send(res, 200, { room: historyView(history, session) });
+          return respond(200, { room: historyView(history, session) });
         }
         if (req.method === 'GET' && url.pathname === '/api/stats') {
-          return send(res, 200, { standings: [...standings.values()].sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || a.name.localeCompare(b.name, 'zh-CN')).slice(0, 100) });
+          return respond(200, { standings: [...standings.values()].sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || a.name.localeCompare(b.name, 'zh-CN')).slice(0, 100) });
         }
         if (req.method !== 'POST') throw fail('接口不存在', 404);
         switch (url.pathname) {
@@ -321,7 +426,7 @@ export function createApp(options = {}) {
           default: throw fail('接口不存在', 404);
         }
         if (room) recordFinished(room, now);
-        return send(res, 200, { room: serialize(room, session, now) });
+        return respond(200, { room: serialize(room, session, now) });
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fail('请求方法不支持', 405);
       let pathname;
@@ -332,10 +437,13 @@ export function createApp(options = {}) {
       let info;
       try { info = await stat(target); } catch { throw fail('页面不存在', 404); }
       if (!info.isFile()) throw fail('页面不存在', 404);
-      const contents = await readFile(target);
+      const actualTarget = await realpath(target);
+      if (!actualTarget.startsWith(realpathSync(ROOT) + path.sep)) throw fail('页面不存在', 404);
+      const contents = await readFile(actualTarget);
       res.writeHead(200, { 'Content-Type': MIME[path.extname(target)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', 'Content-Length': contents.length });
       res.end(req.method === 'HEAD' ? undefined : contents);
     } catch (error) {
+      if (pendingSnapshot) restore(pendingSnapshot);
       const status = error.status ?? 400;
       if (!res.headersSent) send(res, status, { error: error.message || '请求失败，请稍后重试' });
       else res.end();
@@ -344,13 +452,21 @@ export function createApp(options = {}) {
   const server = http.createServer(handler);
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
+  let closePromise;
   return {
     server,
     listen: (...args) => server.listen(...args),
-    close: () => new Promise((resolve, reject) => { clearInterval(timer); server.close(error => error ? reject(error) : resolve()); server.closeIdleConnections(); }),
+    close: () => closePromise ??= new Promise((resolve, reject) => {
+      clearInterval(timer);
+      server.close(error => {
+        try { persistence.close(); } catch (closeError) { error ??= closeError; }
+        if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error); else resolve();
+      });
+      server.closeIdleConnections();
+    }),
     // Test-only observability is available to code importing the server, never over HTTP.
     state: { sessions, rooms, histories, standings },
-    tick: () => cleanup(clock()),
+    tick: () => transaction(() => cleanup(clock())),
   };
 }
 

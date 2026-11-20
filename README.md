@@ -1,6 +1,6 @@
 # 狼人杀
 
-一个中文狼人杀网站：默认匹配 12 人标准局，支持自选角色开房、6 位随机房号、文字聊天和服务端裁判。源码由 GitHub 仓库保存，GitHub Pages 提供网站入口，自己的 Cloudflare 账号运行 Worker 联机服务和 D1 数据库。也支持独立 Node.js 服务。
+一个中文狼人杀网站：默认匹配 12 人标准局，支持自选角色开房、6 位随机房号、文字聊天和服务端裁判。源码由 GitHub 仓库保存，GitHub Pages 提供网站入口，Node.js 联机后端使用 SQLite 保存数据。生产部署需要为数据库挂载持久磁盘，服务重启后从同一数据库恢复房间和对局。另提供 Cloudflare Worker + D1 备选。
 
 界面与操作流程参考 QOJ 的杀人游戏大厅，改为狼人杀角色配置；游戏引擎与联机服务独立实现，不使用参考站的真实玩家信息、历史战绩或账号数据。
 
@@ -19,7 +19,7 @@
 
 ## 开始游戏
 
-完成下方 GitHub Pages 与 Cloudflare 部署，并设置 `API_BASE_URL` 后，打开 Pages 发布的网址即可联机。网站代码、发布流程和数据库均由自己的 GitHub / Cloudflare 账号管理；不依赖临时预览站点。仅部署静态页面时，真人匹配和共享房间尚不可用。
+完成下方 GitHub Pages 与持久化后端部署，并设置 `API_BASE_URL` 后，打开 Pages 发布的网址即可联机。代码保存在自己的 GitHub 仓库，实时对局数据保存在后端数据库，二者独立。仅部署静态页面时，真人匹配和共享房间尚不可用；本文提供部署方法，不代表后端已经上线。
 
 - **快速匹配：**点击「开始匹配」，12 名真人进入同一队列后自动开局。
 - **好友开房：**点击「自选配置开房」，选择角色和时限，再把 6 位房号或「复制邀请链接」得到的网址发给朋友。邀请链接形式为站点路径加 `?room=123456`，打开后会显示加入确认。
@@ -37,6 +37,8 @@ npm start
 ```
 
 浏览器访问终端输出的地址。此时网页与联机 API 由同一个 Node 服务提供，不需要设置外部 API 地址。项目没有第三方运行依赖，无需先执行 `npm install`。
+
+数据库默认写入 `data/moonwolf.sqlite`，也可通过 `DATABASE_PATH` 指定路径。再次启动同一数据库即可恢复已保存状态。正式部署必须把数据库所在目录挂载到持久磁盘或 Docker 卷；容器内的临时目录、免费服务的易失磁盘和 GitHub Actions 工作目录都不能满足重启与重新部署后保留数据的要求。
 
 测试和生成 GitHub Pages 静态文件（测试使用 Node 内置 SQLite）：
 
@@ -78,7 +80,7 @@ git push -u origin main
 
 | 名称 | 示例 |
 | --- | --- |
-| `API_BASE_URL` | Cloudflare 发布结果中的 Worker HTTPS 根地址，例如 `https://werewolf-api.你的子域.workers.dev` |
+| `API_BASE_URL` | 后端发布结果中的 HTTPS 根地址，例如 `https://你的服务名.onrender.com` |
 
 填写后端的 **HTTPS 站点根地址**，不要加 `/api`。重新运行 Pages 工作流后，所有访问者会默认使用这个后端。API 地址是公开配置，不是密钥。
 
@@ -86,7 +88,57 @@ git push -u origin main
 
 ## 部署联机服务
 
-### 自己的 Cloudflare Worker + D1
+### 独立 Node 服务
+
+在支持长时间运行 Node.js 或 Docker、并提供持久磁盘的主机运行 `npm start`。它同时托管前端和 API；不需要 GitHub Pages 时可直接分享该服务地址。`DATABASE_PATH` 必须指向持久磁盘上的 SQLite 文件。代码重新拉取或镜像替换不会迁移数据库，重新发布时必须继续挂载同一份磁盘。
+
+当前 SQLite 后端只运行一个服务实例。多实例需要另外实现独立持久数据库、并发控制与统一房间路由，不能让多个实例各自保存一份房间状态，也不能直接共用此实现的数据库文件。
+
+### 使用 Render
+
+本项目提供 `render.yaml`，可连接 GitHub 仓库后作为 Render Blueprint 导入。配置使用原生 Node.js 24、`starter` 付费实例，并挂载 1 GB 持久磁盘到 `/var/data`；构建命令为 `npm ci --omit=dev`，启动命令为 `node server/index.mjs`。实际套餐、磁盘费用和最终账单以平台创建页面为准，需账号所有者确认费用并完成购买；提交配置文件本身不会代付或开通服务。
+
+手动创建时，务必添加上述持久磁盘，并设置 `DATABASE_PATH=/var/data/moonwolf.sqlite`。免费实例或不带持久磁盘的容器不满足本项目的数据保留要求。运行一个实例，并在每次重新部署时保留原磁盘。
+
+在后端设置环境变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `PORT` | 服务监听端口；部署平台通常自动提供。 |
+| `HOST` | 监听地址，部署时使用 `0.0.0.0`。 |
+| `DATABASE_PATH` | SQLite 文件路径。Render 填 `/var/data/moonwolf.sqlite`；父目录必须在持久磁盘上。 |
+| `ALLOWED_ORIGINS` | 允许调用 API 的网页来源，多个来源用逗号分隔。 |
+
+例如 GitHub Pages 地址是 `https://alice.github.io/moonwolf/`，则允许来源应填 **`https://alice.github.io`**，不包含 `/moonwolf/` 路径。若前端使用自定义域名，应填写该域名的完整来源，例如 `https://play.example.com`。
+
+```text
+ALLOWED_ORIGINS=https://alice.github.io,https://play.example.com
+```
+
+部署完成后，打开 `https://你的后端地址/api/health` 检查服务状态，然后把后端地址填到 GitHub 的 `API_BASE_URL`。GitHub Pages 使用 HTTPS，后端也必须启用 HTTPS，否则浏览器会阻止混合内容请求。
+
+### 使用自己的服务器
+
+可以用进程管理器持续运行 `npm start`，在前面配置 HTTPS 反向代理；也可以使用 Docker：
+
+```bash
+docker build -t moonwolf .
+docker volume create moonwolf-data
+docker run --name moonwolf --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  -v moonwolf-data:/var/data \
+  -e PORT=3000 \
+  -e HOST=0.0.0.0 \
+  -e DATABASE_PATH=/var/data/moonwolf.sqlite \
+  -e ALLOWED_ORIGINS=https://你的用户名.github.io \
+  moonwolf
+```
+
+也可使用仓库中的 `compose.yaml` 启动。上述命令与 Compose 均只在 `127.0.0.1:3000` 提供 HTTP，公网访问需配置 HTTPS 反向代理。升级镜像时保留原数据卷，不要执行删除数据卷的命令。数据库、备份及 SQLite 的相关文件都属于私有游戏数据，不应提交到公开 GitHub 仓库。
+
+### Cloudflare Worker + D1 备选
+
+当前部署过程中，Cloudflare 登录或注册页面返回 403，尚未完成该账号下的后端部署。以下配置保留供账号访问恢复后使用；现阶段可选择上方的 Node + SQLite 持久磁盘方案。
 
 `worker/` 是联机后端，`db/schema.ts` 定义持久化结构，`drizzle/` 保存已生成的数据库迁移。Worker 同时包含网页和 API，D1 保存房间、会话和对局数据。GitHub Actions 可以在源码更新后自动测试、迁移数据库并发布 Worker。
 
@@ -119,62 +171,32 @@ npm run build:cloudflare
 
 如果使用自定义域名，须把其完整来源加入 `ALLOWED_ORIGINS`。例如网页地址 `https://play.example.com/werewolf/` 对应来源 `https://play.example.com`，不包含路径。
 
-### 独立 Node 服务
-
-也可使用支持长时间运行 Node.js 或 Docker 的主机运行 `npm start`。它同时托管前端和 API；不需要 GitHub Pages 时可直接分享该服务地址。Node 版本使用进程内存存储，与 D1 托管版不同。
-
-### 使用 Render
-
-本项目提供 `Dockerfile` 和 `render.yaml`。将源码推送到 GitHub 后，可以在 Render 创建 Web Service，连接仓库，选择 Docker 部署；也可以使用仓库内的 Blueprint 配置。Blueprint 使用 `starter` 付费方案，创建前请检查平台显示的费用。
-
-在后端设置环境变量：
-
-| 变量 | 用途 |
-| --- | --- |
-| `PORT` | 服务监听端口；部署平台通常自动提供。 |
-| `HOST` | 监听地址，部署时使用 `0.0.0.0`。 |
-| `ALLOWED_ORIGINS` | 允许调用 API 的网页来源，多个来源用逗号分隔。 |
-
-例如 GitHub Pages 地址是 `https://alice.github.io/moonwolf/`，则允许来源应填 **`https://alice.github.io`**，不包含 `/moonwolf/` 路径。若前端使用自定义域名，应填写该域名的完整来源，例如 `https://play.example.com`。
-
-```text
-ALLOWED_ORIGINS=https://alice.github.io,https://play.example.com
-```
-
-部署完成后，打开 `https://你的后端地址/api/health` 检查服务状态，然后把后端地址填到 GitHub 的 `API_BASE_URL`。GitHub Pages 使用 HTTPS，后端也必须启用 HTTPS，否则浏览器会阻止混合内容请求。
-
-### 使用自己的服务器
-
-可以用进程管理器持续运行 `npm start`，在前面配置 HTTPS 反向代理；也可以使用 Docker：
-
-```bash
-docker build -t moonwolf .
-docker run --name moonwolf --restart unless-stopped \
-  -p 3000:3000 \
-  -e PORT=3000 \
-  -e HOST=0.0.0.0 \
-  -e ALLOWED_ORIGINS=https://你的用户名.github.io \
-  moonwolf
-```
-
-此命令在本机开放 HTTP 端口；公网 HTTPS 仍需由主机平台或反向代理提供。
-
 ### 数据保存与容量
 
-| 项目 | Worker + D1 托管版 | 独立 Node 版 |
+| 项目 | Node + SQLite 持久磁盘版 | Worker + D1 备选 |
 | --- | --- | --- |
-| 房间、会话、聊天、历史和战绩 | 存入 D1，Worker 重启或重新发布后保留 | 存在进程内存，服务重启即清空 |
-| 活动房间 / 会话上限 | 20 / 500 | 1000 / 10000 |
-| 已结束对局 | 最近 20 场 | 最近 100 场 |
-| 每房间聊天 | 最近 400 条；房间记录过大时进一步移除旧消息 | 最近 2000 条 |
+| 房间、身份、会话、聊天、历史和战绩 | 存入 SQLite；重启或重新发布时继续挂载同一数据库即可恢复 | 存入 D1，Worker 重启或重新发布后保留 |
+| 活动房间 / 会话上限 | 1000 / 10000 | 20 / 500 |
+| 已结束对局 | 最近 100 场 | 最近 20 场 |
+| 每房间聊天 | 最近 2000 条 | 最近 400 条；房间记录过大时进一步移除旧消息 |
 
-托管版将房间聊天控制在约 220 KiB 的房间记录范围内，全部业务状态上限为 10 MiB，超出容量时会拒绝新增操作并提示稍后重试。适合朋友组局和小规模匹配；大量公开用户需要进一步拆分存储和扩容。
+Node 服务在成功操作响应前提交 SQLite 事务；游戏计时推进也会保存。服务重启从最后一次已提交的状态恢复，停机时间不计入阶段倒计时和离线清理期限；进行中阶段恢复剩余时长，至少留 30 秒操作时间，房间和会话另有 2 分钟重连宽限。存储写入失败或出现状态冲突时服务停止接受操作并返回 503，不会把未保存的操作报告为成功。修复存储问题后需重启服务。
 
-等待中的玩家超过 2 分钟无活动会移出房间，房间整体闲置超过 30 分钟会清理，会话闲置超过 24 小时失效。托管版由客户端请求推进已到期阶段；所有人离线时不会有常驻进程继续跑完整局。数据库持久化不等于永久保留每一局或找回已失效的浏览器会话。
+D1 版将房间聊天控制在约 220 KiB 的房间记录范围内，全部业务状态上限为 10 MiB，超出容量时会拒绝新增操作并提示稍后重试。适合朋友组局和小规模匹配；大量公开用户需要进一步拆分存储和扩容。
+
+保留上限和正常运行期间的清理规则仍然生效：等待中的玩家超过 2 分钟无活动会移出房间，房间整体闲置超过 30 分钟会清理，会话闲置超过 24 小时失效。重启本身不会清空对局，持久化也不表示无限保留历史。D1 版由客户端请求推进已到期阶段；没有 Node 版的进程停机恢复计时机制。
 
 公开房间的结束记录可由任意会话查看；私密房间的结束记录仅该局参与者可查看。结算后才公开所有身份、保留的狼队聊天和夜间行动记录。夜间复盘包括守护目标、每名狼人的刀人票与最终刀口、查验目标与结果、女巫用药情况。
 
-战绩跟随玩家会话累计，昵称不是唯一账号，也不支持跨设备凭昵称找回。独立 Node 版不要直接开启多实例负载均衡；不同实例不共享内存房间。
+战绩跟随玩家会话累计，昵称不是唯一账号，也不支持跨设备凭昵称找回。重启后应在原浏览器标签页恢复会话；清除浏览器会话、删除数据库或换到另一台未挂载原磁盘的服务器，不会自动找回原身份。请定期备份数据库；持久磁盘能跨进程重启保留数据，不替代灾难恢复备份。
+
+可在服务运行时生成一致的 SQLite 备份：
+
+```bash
+npm run backup -- /absolute/new-backup.sqlite
+```
+
+源数据库默认是 `data/moonwolf.sqlite`，若服务使用 `DATABASE_PATH`，执行备份时也须设置同一变量。目标必须是一个不存在的绝对路径，命令拒绝覆盖已有备份。成功后应将备份另存到外部存储，并定期验证恢复；仅留在原服务器同一块磁盘上不能防止磁盘丢失。
 
 ## 本项目采用的规则
 
@@ -220,7 +242,11 @@ docker run --name moonwolf --restart unless-stopped \
 
 **为什么不能直接靠 GitHub 仓库同步房间？**
 
-GitHub Pages 没有常驻游戏进程。多人匹配、随机身份和隐藏信息需要所有玩家共同连接一个受控服务；不能通过公开仓库文件安全地承担这些职责。
+GitHub 保存源码和自动部署配置，GitHub Pages 提供静态网页，实时对局由后端数据库保存。Pages 没有常驻游戏进程。多人匹配、随机身份和隐藏信息需要所有玩家共同连接一个受控服务；不能通过公开仓库文件安全地承担这些职责。
+
+**为什么用了 SQLite，重新部署后仍可能丢数据？**
+
+SQLite 是数据库文件，文件必须位于平台的持久磁盘上。检查 `DATABASE_PATH`、磁盘挂载路径和重新部署时是否使用原磁盘；只选择付费实例而不挂载持久磁盘仍不足以保证数据保留。
 
 ## 代码位置
 
@@ -228,7 +254,7 @@ GitHub Pages 没有常驻游戏进程。多人匹配、随机身份和隐藏信�
 | --- | --- |
 | `web/` | 页面、样式、交互及静态配置。 |
 | `web/engine.js` | 浏览器体验与服务端共用的规则引擎。 |
-| `server/index.mjs` | 独立 Node 内存服务。 |
+| `server/index.mjs` | 独立 Node 联机服务及 SQLite 持久化。 |
 | `worker/` | Cloudflare Worker API、并发控制和 D1 数据存储。 |
 | `db/schema.ts`、`drizzle/` | 数据库结构和版本化迁移。 |
 | `tests/` | 规则与服务器测试。 |
@@ -237,7 +263,7 @@ GitHub Pages 没有常驻游戏进程。多人匹配、随机身份和隐藏信�
 | `scripts/configure-cloudflare.mjs`、`wrangler.example.json` | 从非敏感配置生成自己的 Cloudflare 部署设置，以及手动配置示例。 |
 | `.github/workflows/pages.yml` | GitHub Pages 自动发布。 |
 | `.github/workflows/cloudflare.yml` | Cloudflare Worker 测试、D1 迁移与自动发布。 |
-| `Dockerfile`、`render.yaml` | 后端部署配置。 |
+| `Dockerfile`、`render.yaml`、`compose.yaml` | 带持久数据卷的后端部署配置。 |
 
 部署平台的使用说明：[GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)、[GitHub Pages 工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[Cloudflare GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、[Cloudflare D1](https://developers.cloudflare.com/d1/get-started/)、[Render Web Services](https://render.com/docs/web-services)。
 
