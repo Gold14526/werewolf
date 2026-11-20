@@ -1,0 +1,244 @@
+# 狼人杀
+
+一个中文狼人杀网站：默认匹配 12 人标准局，支持自选角色开房、6 位随机房号、文字聊天和服务端裁判。源码由 GitHub 仓库保存，GitHub Pages 提供网站入口，自己的 Cloudflare 账号运行 Worker 联机服务和 D1 数据库。也支持独立 Node.js 服务。
+
+界面与操作流程参考 QOJ 的杀人游戏大厅，改为狼人杀角色配置；游戏引擎与联机服务独立实现，不使用参考站的真实玩家信息、历史战绩或账号数据。
+
+## 包含什么
+
+- 默认 12 人局：4 狼人、4 村民、预言家、女巫、猎人、守卫各 1 人。
+- 自定义 6–18 人房间，选择角色数量、阶段时长和胜利条件。
+- 随机生成 6 位数字房号，并在服务端检查当前房号是否重复。
+- 自动匹配、房号或邀请链接加入、公开房间列表、准备状态、房主开局。
+- 夜间技能、按座位轮流发言、遗言、投票放逐、平票 PK、狼人自爆、猎人开枪和胜负结算。
+- 狼队夜间私聊、已结束对局回看、个人战绩和胜场榜。
+- 服务端按玩家身份过滤返回数据，未结束时不会把其他玩家的隐藏身份发给客户端。
+- 本地体验模式，可先试用界面和规则；本地房间不会向其他设备开放。
+
+当前采用文字交流，没有麦克风语音、警长竞选或账号注册。
+
+## 开始游戏
+
+完成下方 GitHub Pages 与 Cloudflare 部署，并设置 `API_BASE_URL` 后，打开 Pages 发布的网址即可联机。网站代码、发布流程和数据库均由自己的 GitHub / Cloudflare 账号管理；不依赖临时预览站点。仅部署静态页面时，真人匹配和共享房间尚不可用。
+
+- **快速匹配：**点击「开始匹配」，12 名真人进入同一队列后自动开局。
+- **好友开房：**点击「自选配置开房」，选择角色和时限，再把 6 位房号或「复制邀请链接」得到的网址发给朋友。邀请链接形式为站点路径加 `?room=123456`，打开后会显示加入确认。
+- **开始对局：**所有玩家准备后，房主点击「开始游戏」。
+- **断线恢复：**页面会显示断线状态并自动重连；刷新同一标签页可以恢复原座位。
+
+「本地试玩」是单独的电脑演示，不会加入真人队列。
+
+## 先在自己的电脑上运行
+
+安装 **Node.js 22.13 或更新版本**，在项目根目录运行：
+
+```bash
+npm start
+```
+
+浏览器访问终端输出的地址。此时网页与联机 API 由同一个 Node 服务提供，不需要设置外部 API 地址。项目没有第三方运行依赖，无需先执行 `npm install`。
+
+测试和生成 GitHub Pages 静态文件（测试使用 Node 内置 SQLite）：
+
+```bash
+npm test
+npm run build
+```
+
+`dist/` 是构建结果；修改源码时请编辑 `web/`。请通过 HTTP 服务打开页面，不要直接双击 `index.html` 使用 `file://`。
+
+玩家身份保存在当前标签页的 `sessionStorage` 中，刷新页面可恢复会话和房间；新开独立标签页可以作为另一名玩家测试。请直接打开网址，不要使用「复制标签页」，以免浏览器复制原会话。这里没有账号登录，清除浏览器会话或换设备后不能凭昵称找回原身份。真实匹配需要足够数量的真人客户端，不会由服务器自动补机器人。
+
+## 部署到 GitHub Pages
+
+GitHub Pages 托管的是 HTML、CSS、JavaScript 等静态文件，不能运行本项目的 Node 联机进程。可以先部署前端体验，再接入后端；仅上传前端不会产生跨设备共享的房间。
+
+1. 使用 GitHub 仓库 `Gold14526/werewolf`；自行复制项目时也可以使用其他仓库名。
+2. 将本项目的**根目录内容**提交到仓库的 `main` 分支，确保 `package.json` 和 `.github/workflows/pages.yml` 位于正确位置。上传文件时不要漏掉隐藏的 `.github` 目录，也不要把 ZIP 压缩包直接当作网站文件上传。
+3. 在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
+4. 在 **Actions** 中运行 **Deploy GitHub Pages**，或向 `main` 再提交一次修改。
+5. 工作流成功后，在 **Settings → Pages** 查看实际访问地址。本仓库默认地址为 `https://gold14526.github.io/werewolf/`，是否已发布以 Pages 设置和 Actions 结果为准。
+
+如果使用 Git 命令，先将下方地址换成自己的仓库：
+
+```bash
+git init
+git add .
+git commit -m "Add Moonwolf game"
+git branch -M main
+git remote add origin https://github.com/Gold14526/werewolf.git
+git push -u origin main
+```
+
+如果你的默认分支不是 `main`，同步修改 `.github/workflows/pages.yml` 的 `on.push.branches`。
+
+### 让所有访问者连接同一台后端
+
+后端上线后，在 GitHub 仓库 **Settings → Secrets and variables → Actions → Variables** 新建仓库变量：
+
+| 名称 | 示例 |
+| --- | --- |
+| `API_BASE_URL` | Cloudflare 发布结果中的 Worker HTTPS 根地址，例如 `https://werewolf-api.你的子域.workers.dev` |
+
+填写后端的 **HTTPS 站点根地址**，不要加 `/api`。重新运行 Pages 工作流后，所有访问者会默认使用这个后端。API 地址是公开配置，不是密钥。
+
+也可以在网页中的「联机设置」临时填写 API 地址；该设置仅影响当前浏览器。若临时配置覆盖了新的默认地址，请在联机设置中更新或清除旧值。
+
+## 部署联机服务
+
+### 自己的 Cloudflare Worker + D1
+
+`worker/` 是联机后端，`db/schema.ts` 定义持久化结构，`drizzle/` 保存已生成的数据库迁移。Worker 同时包含网页和 API，D1 保存房间、会话和对局数据。GitHub Actions 可以在源码更新后自动测试、迁移数据库并发布 Worker。
+
+先在自己的 Cloudflare 账号创建一个 D1 数据库，建议命名 `werewolf-db`。记录它的 Database ID 和账号的 Account ID，再准备仅用于该账号 Worker 发布和 D1 访问的 API Token。Token 只能放入 GitHub Actions Secrets，不要提交到源码或填写到网页的联机地址中。
+
+在仓库 **Settings → Secrets and variables → Actions** 设置：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `CLOUDFLARE_API_TOKEN` | Cloudflare API Token。 |
+| Secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID。 |
+| Variable | `CF_DATABASE_ID` | 已创建的 D1 Database ID，UUID 格式。 |
+| Variable | `CF_DATABASE_NAME` | 可选，默认 `werewolf-db`，应与已创建数据库名称一致。 |
+| Variable | `WORKER_NAME` | 可选，默认 `werewolf-api`。 |
+| Variable | `ALLOWED_ORIGINS` | 可选，额外允许的前端来源，多个以逗号分隔；工作流自动加入仓库所有者的 GitHub Pages 来源。 |
+| Variable | `CLOUDFLARE_DEPLOY_ENABLED` | 配置完成后设为 `true`，启用后端自动发布。 |
+
+在 **Actions** 中运行 **Deploy multiplayer backend**，成功后从日志获取 Worker HTTPS 地址。访问其 `/api/health` 确认服务可用，再将根地址写入前述 `API_BASE_URL` 并重新运行 Pages 发布工作流。没有配置 Cloudflare 时，后端工作流会跳过，不影响静态页面发布。
+
+本地构建 Worker：
+
+```bash
+npm ci
+npm run build:cloudflare
+```
+
+构建输出 `dist/server/index.js`，包含网页和 API。数据库通过 `DB` 绑定提供给 Worker；工作流生成的 Wrangler 配置指向 `drizzle/` 迁移目录。数据库结构有变化时运行 `npm run db:generate`，审查并提交新迁移；不要修改已经应用的迁移文件。
+
+`npm run build` 生成 GitHub Pages 静态文件，`npm run build:cloudflare` 生成 Worker，两者都写入 `dist/`。分别构建和发布，不要混用输出。游戏运行不依赖第三方 Node 包。
+
+如果使用自定义域名，须把其完整来源加入 `ALLOWED_ORIGINS`。例如网页地址 `https://play.example.com/werewolf/` 对应来源 `https://play.example.com`，不包含路径。
+
+### 独立 Node 服务
+
+也可使用支持长时间运行 Node.js 或 Docker 的主机运行 `npm start`。它同时托管前端和 API；不需要 GitHub Pages 时可直接分享该服务地址。Node 版本使用进程内存存储，与 D1 托管版不同。
+
+### 使用 Render
+
+本项目提供 `Dockerfile` 和 `render.yaml`。将源码推送到 GitHub 后，可以在 Render 创建 Web Service，连接仓库，选择 Docker 部署；也可以使用仓库内的 Blueprint 配置。Blueprint 使用 `starter` 付费方案，创建前请检查平台显示的费用。
+
+在后端设置环境变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `PORT` | 服务监听端口；部署平台通常自动提供。 |
+| `HOST` | 监听地址，部署时使用 `0.0.0.0`。 |
+| `ALLOWED_ORIGINS` | 允许调用 API 的网页来源，多个来源用逗号分隔。 |
+
+例如 GitHub Pages 地址是 `https://alice.github.io/moonwolf/`，则允许来源应填 **`https://alice.github.io`**，不包含 `/moonwolf/` 路径。若前端使用自定义域名，应填写该域名的完整来源，例如 `https://play.example.com`。
+
+```text
+ALLOWED_ORIGINS=https://alice.github.io,https://play.example.com
+```
+
+部署完成后，打开 `https://你的后端地址/api/health` 检查服务状态，然后把后端地址填到 GitHub 的 `API_BASE_URL`。GitHub Pages 使用 HTTPS，后端也必须启用 HTTPS，否则浏览器会阻止混合内容请求。
+
+### 使用自己的服务器
+
+可以用进程管理器持续运行 `npm start`，在前面配置 HTTPS 反向代理；也可以使用 Docker：
+
+```bash
+docker build -t moonwolf .
+docker run --name moonwolf --restart unless-stopped \
+  -p 3000:3000 \
+  -e PORT=3000 \
+  -e HOST=0.0.0.0 \
+  -e ALLOWED_ORIGINS=https://你的用户名.github.io \
+  moonwolf
+```
+
+此命令在本机开放 HTTP 端口；公网 HTTPS 仍需由主机平台或反向代理提供。
+
+### 数据保存与容量
+
+| 项目 | Worker + D1 托管版 | 独立 Node 版 |
+| --- | --- | --- |
+| 房间、会话、聊天、历史和战绩 | 存入 D1，Worker 重启或重新发布后保留 | 存在进程内存，服务重启即清空 |
+| 活动房间 / 会话上限 | 20 / 500 | 1000 / 10000 |
+| 已结束对局 | 最近 20 场 | 最近 100 场 |
+| 每房间聊天 | 最近 400 条；房间记录过大时进一步移除旧消息 | 最近 2000 条 |
+
+托管版将房间聊天控制在约 220 KiB 的房间记录范围内，全部业务状态上限为 10 MiB，超出容量时会拒绝新增操作并提示稍后重试。适合朋友组局和小规模匹配；大量公开用户需要进一步拆分存储和扩容。
+
+等待中的玩家超过 2 分钟无活动会移出房间，房间整体闲置超过 30 分钟会清理，会话闲置超过 24 小时失效。托管版由客户端请求推进已到期阶段；所有人离线时不会有常驻进程继续跑完整局。数据库持久化不等于永久保留每一局或找回已失效的浏览器会话。
+
+公开房间的结束记录可由任意会话查看；私密房间的结束记录仅该局参与者可查看。结算后才公开所有身份、保留的狼队聊天和夜间行动记录。夜间复盘包括守护目标、每名狼人的刀人票与最终刀口、查验目标与结果、女巫用药情况。
+
+战绩跟随玩家会话累计，昵称不是唯一账号，也不支持跨设备凭昵称找回。独立 Node 版不要直接开启多实例负载均衡；不同实例不共享内存房间。
+
+## 本项目采用的规则
+
+不同线下桌游的细则并不完全相同，以下为本实现约定：
+
+| 项目 | 规则 |
+| --- | --- |
+| 标准配置 | 4 狼、4 民、预言家、女巫、猎人、守卫各 1 人。 |
+| 自选配置 | 6–18 人；狼人至少 1 人、至多 6 人且少于总人数的一半；村民至少 1 人；每种神职至多 1 人。「屠边」配置至少包含 1 个神职。 |
+| 夜间顺序 | 守卫 → 狼人 → 预言家 → 女巫；仅略过配置中不存在的角色阶段。已配置的角色即使出局仍保留对应阶段，避免阶段变化泄露隐藏身份。 |
+| 守卫 | 可守护一人，不能连续两夜守护同一人。 |
+| 女巫 | 全局各一瓶解药和毒药，每夜最多使用一种；仅首夜可以自救；只有解药尚未用完时能看到刀口。守护与解药同时落在刀口上时该玩家仍会死亡，毒药无视守护。 |
+| 狼人刀人 | 存活狼人各自投票，唯一最高票成为刀口；并列或全部放弃则无人被刀，可以选择狼队友。 |
+| 猎人 | 符合开枪条件时可带走一人，被毒杀不能开枪。 |
+| 白天 | 存活玩家按座位升序逐个发言，每人独立计时，可提前「过」。只有当前发言者能发送公开消息；其他人可先写草稿。 |
+| 遗言 | 首夜出局者和白天被放逐者有遗言；猎人开枪带走的玩家在首夜或白天也有遗言。其他夜晚的死者没有遗言。 |
+| 投票 | 存活玩家同时投票，可弃权，不能投自己；投票结束后公布具体票型。 |
+| 平票 PK | 首轮最高票并列时，仅平票玩家依次发言；随后重投，只能投给平票玩家，平票玩家不投票。第二轮仍平票或无人投票，则无人出局。 |
+| 狼队私聊 | 仅存活狼人可在「狼人行动」阶段发送队内消息；好人看不到未结束对局的狼队聊天，狼人可见队友当轮刀人选择。 |
+| 狼人自爆 | 存活狼人可在白天发言或投票阶段自爆，公开狼人身份并出局，立即结束当天进入黑夜；遗言阶段不可自爆。 |
+| 好人胜利 | 所有狼人出局。 |
+| 狼人「屠边」 | 村民全部出局，或神职全部出局。 |
+| 狼人「屠城」 | 所有好人出局。 |
+| 平局 | 完成第 20 天仍未达到胜利条件则判平局，不进入第 21 夜。 |
+| 超时 | 未提交的技能和投票按放弃处理，避免房间因离线而永久卡住。 |
+| 阶段时长 | 每个夜间行动阶段固定持续 30/45/60 秒中的所选时长，默认 45 秒，全部提交也不会提前结束。每人发言与遗言可选 60/90/120 秒，默认 90 秒；投票与猎人阶段使用夜间时长，可在所有应行动者提交后提前结束。 |
+
+实际身份、技能目标、行动结果与胜负均由联机服务校验。房号只用于找到房间，不是账号密码；请只把邀请房号分享给打算一起玩的朋友。
+
+## 常见问题
+
+**页面可以打开，但朋友搜不到房间。**
+
+检查是否误选了本地试玩，以及朋友是否有访问站点的权限。所有人必须连接同一个后端；分享不同部署的网址会进入不同队列。
+
+**已设置 API 地址，仍连接失败。**
+
+检查 `/api/health`、HTTPS、后端是否在线，以及 `ALLOWED_ORIGINS` 是否与网页的来源完全相同。来源包含协议和端口，不包含路径。托管服务休眠后首次连接可能需要等待启动。
+
+**Pages 页面空白或资源 404。**
+
+检查 Actions 是否成功，发布来源是否为 GitHub Actions，源码是否多嵌套了一层文件夹。静态资源使用相对路径，可用于仓库子路径。
+
+**为什么不能直接靠 GitHub 仓库同步房间？**
+
+GitHub Pages 没有常驻游戏进程。多人匹配、随机身份和隐藏信息需要所有玩家共同连接一个受控服务；不能通过公开仓库文件安全地承担这些职责。
+
+## 代码位置
+
+| 路径 | 内容 |
+| --- | --- |
+| `web/` | 页面、样式、交互及静态配置。 |
+| `web/engine.js` | 浏览器体验与服务端共用的规则引擎。 |
+| `server/index.mjs` | 独立 Node 内存服务。 |
+| `worker/` | Cloudflare Worker API、并发控制和 D1 数据存储。 |
+| `db/schema.ts`、`drizzle/` | 数据库结构和版本化迁移。 |
+| `tests/` | 规则与服务器测试。 |
+| `scripts/build.mjs` | 生成 GitHub Pages 静态网站。 |
+| `scripts/build-hosted.mjs` | 生成带联机服务的 Worker 网站。 |
+| `scripts/configure-cloudflare.mjs`、`wrangler.example.json` | 从非敏感配置生成自己的 Cloudflare 部署设置，以及手动配置示例。 |
+| `.github/workflows/pages.yml` | GitHub Pages 自动发布。 |
+| `.github/workflows/cloudflare.yml` | Cloudflare Worker 测试、D1 迁移与自动发布。 |
+| `Dockerfile`、`render.yaml` | 后端部署配置。 |
+
+部署平台的使用说明：[GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)、[GitHub Pages 工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[Cloudflare GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、[Cloudflare D1](https://developers.cloudflare.com/d1/get-started/)、[Render Web Services](https://render.com/docs/web-services)。
+
+代码按 [MIT License](LICENSE) 开源。

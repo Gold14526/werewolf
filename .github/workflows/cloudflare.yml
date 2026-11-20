@@ -1,0 +1,51 @@
+name: Deploy multiplayer backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ vars.CLOUDFLARE_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_DATABASE_ID: ${{ vars.CF_DATABASE_ID }}
+      CF_DATABASE_NAME: ${{ vars.CF_DATABASE_NAME }}
+      WORKER_NAME: ${{ vars.WORKER_NAME }}
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check deployment authorization
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as repository secrets before enabling deployment."
+            exit 1
+          fi
+      - name: Install build dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Build portable Worker
+        run: npm run build:cloudflare
+      - name: Configure own Cloudflare database and GitHub Pages origin
+        run: node scripts/configure-cloudflare.mjs
+      - name: Apply pending database migrations
+        run: npx --no-install wrangler d1 migrations apply DB --remote --config wrangler.generated.json
+      - name: Deploy Worker
+        run: npx --no-install wrangler deploy --config wrangler.generated.json

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: moonwolf
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: ALLOWED_ORIGINS
+        sync: false

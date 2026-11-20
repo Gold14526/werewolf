@@ -1,0 +1,23 @@
+{
+  "name": "moonwolf",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "月下狼人杀：GitHub Pages 前端与独立多人游戏服务",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:hosted": "node scripts/build-hosted.mjs",
+    "build:cloudflare": "node scripts/build-hosted.mjs --portable",
+    "db:generate": "drizzle-kit generate",
+    "start": "node server/index.mjs",
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "wrangler": "4.92.0"
+  }
+}
