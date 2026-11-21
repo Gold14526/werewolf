@@ -58,7 +58,7 @@ test('standard deck has 12 roles and distinct assigned players', () => {
   assert.equal(g.players.length, 12);
   for (const [role, count] of Object.entries(STANDARD_CONFIG.roles)) assert.equal(g.players.filter(p => p.role === role).length, count);
   assert.equal(g.phase, 'guard');
-  assert.equal(g.deadline, 46000);
+  assert.equal(g.deadline, 76000);
 });
 
 test('rejects impossible and malformed configurations', () => {

@@ -4,7 +4,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat } from '../web/engine.js';
+import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat, isWolfRole } from '../web/engine.js';
 import { openPersistence } from './persistence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
@@ -178,7 +178,7 @@ export function createApp(options = {}) {
       code: room.code, name: room.name, hostId: room.hostId, visibility: room.visibility,
       matchmaking: room.matchmaking, config: room.config, createdAt: room.createdAt,
       players: room.players.map(p => ({ id: p.id, name: p.name, seat: p.seat, ready: p.ready, connected: now - p.session.lastSeen < 45 * SECOND })),
-      messages: room.messages.filter(message => message.channel !== 'wolf' || room.game?.phase === 'finished' || room.game?.players.find(p => p.id === session.id)?.role === 'wolf'),
+      messages: room.messages.filter(message => message.channel !== 'wolf' || room.game?.phase === 'finished' || isWolfRole(room.game?.players.find(p => p.id === session.id)?.role)),
       game: room.game ? gameView(room.game, session.id) : null,
     };
   }
@@ -204,7 +204,7 @@ export function createApp(options = {}) {
       let stat = standings.get(player.id);
       if (!stat) standings.set(player.id, stat = { id: player.id, name: player.name, wins: 0, games: 0, winRate: 0 });
       stat.games++;
-      if ((player.role === 'wolf' ? 'wolf' : 'good') === room.game.winner) stat.wins++;
+      if ((isWolfRole(player.role) ? 'wolf' : 'good') === room.game.winner) stat.wins++;
       stat.winRate = Math.round(stat.wins / stat.games * 100);
     }
   }

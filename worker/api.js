@@ -1,4 +1,4 @@
-import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat } from '../web/engine.js';
+import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat, isWolfRole } from '../web/engine.js';
 import { withState } from './store.js';
 
 const MINUTE = 60000, HOUR = 60 * MINUTE;
@@ -79,7 +79,7 @@ function serialize(state, room, session, now) {
     code: room.code, name: room.name, hostId: room.hostId, visibility: room.visibility,
     matchmaking: room.matchmaking, config: room.config, createdAt: room.createdAt,
     players: room.players.map(p => ({ ...p, connected: now - (sessionById(state, p.id)?.lastSeen ?? 0) < 45000 })),
-    messages: room.messages.filter(m => m.channel !== 'wolf' || room.game?.phase === 'finished' || room.game?.players.find(p => p.id === session.id)?.role === 'wolf'),
+    messages: room.messages.filter(m => m.channel !== 'wolf' || room.game?.phase === 'finished' || isWolfRole(room.game?.players.find(p => p.id === session.id)?.role)),
     game: room.game ? gameView(room.game, session.id) : null,
   };
 }
@@ -93,7 +93,7 @@ function recordFinished(state, room, now) {
     let stat = state.standings.get(p.id);
     if (!stat) state.standings.set(p.id, stat = { id: p.id, name: p.name, wins: 0, games: 0, winRate: 0, updatedAt: now });
     stat.games++;
-    if ((p.role === 'wolf' ? 'wolf' : 'good') === room.game.winner) stat.wins++;
+    if ((isWolfRole(p.role) ? 'wolf' : 'good') === room.game.winner) stat.wins++;
     stat.winRate = Math.round(stat.wins / stat.games * 100);
     stat.updatedAt = now;
   }
