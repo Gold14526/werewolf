@@ -93,12 +93,20 @@ git push -u origin main
 
 前端继续使用自己的 GitHub Pages，后端只需一个 Neon 项目。Neon Functions 执行联机 API，Postgres 持久保存状态，不需要购买常驻 Node 实例或挂载 SQLite 磁盘。免费计划有算力、调用次数和流量额度；额度用尽可能暂停服务，适合小规模组局，具体限制以 [Neon 官方计划](https://neon.com/docs/introduction/plans) 为准。
 
+推荐在浏览器中把 Neon 项目连接到自己的 GitHub 仓库；安装 Neon 官方 GitHub App 时只选择这个仓库。集成会自动设置仓库 Secret `NEON_API_KEY` 和 Variable `NEON_PROJECT_ID`，再添加 Variable `NEON_BRANCH_ID` 指向已有生产数据库分支。
+
+在 **Actions → Deploy Neon API → Run workflow** 选择 GitHub 的 `main`，把 `neon_branch` 填成目标 Neon 分支 ID 或准确名称。工作流自动测试、构建、发布，并验证本次活动版本的 Postgres 健康状态；成功后从 Summary 复制 API 根地址，设置 `API_BASE_URL` 并重新运行 Pages 发布。
+
+后续若要自动发布，将仓库 Variable `NEON_DEPLOY_ENABLED` 设为 `true`。手动和自动发布都只允许 GitHub `main` 分支；自动发布只响应工作流列出的后端相关文件变化。目标 Neon 分支必须已经存在，工作流不会创建或删除数据库分支。完整浏览器配置、分支选择和恢复验证步骤见 [docs/NEON.md](docs/NEON.md)，不需要另行登录本地 CLI。
+
+本地开发时也可单独构建：
+
 ```bash
 npm ci
 npm run build:neon
 ```
 
-构建生成 `dist-neon/index.mjs` 及部署 ZIP；`neon.ts` 提供 Neon CLI 配置。部署步骤、环境变量、数据库恢复语义和验证范围见 [docs/NEON.md](docs/NEON.md)。构建成功仅说明产物已生成，仍需发布 Function、验证 `/api/health`，并将地址配置到 GitHub Pages。
+构建生成 `dist-neon/index.mjs` 和 `dist-neon/werewolf.zip`；`neon.ts` 保留可选 Neon CLI 配置。构建成功仅说明产物已生成，不代表接口已上线。
 
 ### 可选：独立 Node + SQLite 服务
 
@@ -270,6 +278,7 @@ SQLite 是数据库文件，文件必须位于平台的持久磁盘上。检查 
 | `web/engine.js` | 浏览器体验与服务端共用的规则引擎。 |
 | `neon/index.mjs`、`neon/store.mjs`、`neon/schema.sql` | Neon Function 入口、Postgres 事务与恢复逻辑、数据库结构。 |
 | `neon.ts`、`scripts/build-neon.mjs` | Neon CLI 配置及 Function 构建。 |
+| `.github/workflows/neon.yml`、`scripts/deploy-neon.mjs` | 从 GitHub 发布 Neon Function，并确认本次版本与 Postgres 健康状态。 |
 | `docs/NEON.md` | GitHub Pages + Neon 部署、恢复语义及验证范围。 |
 | `server/index.mjs` | 独立 Node 联机服务及 SQLite 持久化。 |
 | `worker/` | Cloudflare Worker API、并发控制和 D1 数据存储。 |

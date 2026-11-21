@@ -1,0 +1,65 @@
+name: Deploy Neon API
+
+on:
+  workflow_dispatch:
+    inputs:
+      neon_branch:
+        description: Existing Neon branch name or ID (no branch is created)
+        required: true
+        default: production
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'neon/**'
+      - 'worker/**'
+      - 'web/engine.js'
+      - 'scripts/build-neon.mjs'
+      - 'scripts/deploy-neon.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/neon.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-production-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only trusted main-branch code can receive deployment credentials.
+    # Push deployment remains off until NEON_DEPLOY_ENABLED is explicitly true.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.NEON_DEPLOY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Build function
+        run: npm run build:neon
+      - name: Save deployable function archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-werewolf-function
+          path: dist-neon/werewolf.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Deploy function and verify Postgres
+        id: deploy
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID || secrets.NEON_PROJECT_ID }}
+          NEON_BRANCH: ${{ inputs.neon_branch || vars.NEON_BRANCH_ID || vars.NEON_BRANCH || secrets.NEON_BRANCH_ID || 'production' }}
+          ALLOWED_ORIGINS: https://gold14526.github.io
+        run: node scripts/deploy-neon.mjs

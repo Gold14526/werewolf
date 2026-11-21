@@ -2,53 +2,39 @@
 
 GitHub 仓库保存源码，GitHub Pages 托管网页；浏览器把匹配、房间、聊天和行动请求发给 Neon Function，Function 在 Postgres 中读取并提交对局状态。Neon 后端只需要一个项目，前端继续使用自己的 Pages 网址。本说明是部署步骤，不表示接口已经发布或完成线上验证。
 
-## 准备与构建
+## 推荐：浏览器连接 GitHub，再用 Actions 发布
 
-1. 在自己的 Neon 账号创建项目，选择支持 Functions 的区域；中国及周边玩家可先选择 Singapore。保留同一个生产分支和数据库，重新发布函数不需要重新创建项目。
-2. 本地安装 Node.js 22.13 或更新版本；Neon Functions 的运行环境为 Node.js 24。
-3. 在仓库根目录安装依赖并构建：
+1. 在自己的 Neon 账号创建同时启用 Postgres 和 Functions 的项目，选择支持 Functions 的区域；中国及周边玩家可先选择 Singapore。保留同一个生产分支和数据库，重新发布函数不需要重新创建项目。
+2. 在 Neon 项目中连接 GitHub，安装 Neon 官方 GitHub App 时只选择需要部署的仓库，例如 `Gold14526/werewolf`。完成项目与仓库关联后，集成会自动配置发布所需的仓库凭据，不需要另走本地 CLI 登录。
+3. 在 GitHub 仓库 **Settings → Secrets and variables → Actions** 确认以下配置。密钥只保留在 Secrets 中，不复制到源码、Pages 配置或聊天记录。
 
-```bash
-npm ci
-npm run build:neon
-```
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `NEON_API_KEY` | Neon GitHub 集成自动配置的发布凭据。 |
+| Variable | `NEON_PROJECT_ID` | Neon GitHub 集成自动配置的目标项目 ID。 |
+| Variable | `NEON_BRANCH_ID` | 要发布到的**已有**生产数据库分支 ID，从 Neon 控制台复制；建议明确设置。 |
+| Variable | `NEON_DEPLOY_ENABLED` | 设为 `true` 后，允许相关源码推送到 GitHub `main` 时自动发布；首次手动发布无需开启。 |
 
-产物是 `dist-neon/index.mjs` 和 `dist-neon/werewolf.zip`；ZIP 根目录只有 `index.mjs`。构建会打包后端代码和所需依赖，不包含前端网页、数据库内容或连接凭据。静态网页仍由 `npm run build` 生成到 `dist/`，两种构建互不覆盖。
+在 **Actions → Deploy Neon API → Run workflow** 中选择 GitHub 分支 `main`，并在 `neon_branch` 填写目标 Neon 分支的准确 ID 或名称。手动输入优先于仓库变量；默认值 `production` 只有在数据库中确实存在同名分支时才适用。
 
-## 发布联机 API
+工作流会依次安装依赖、运行测试、构建 Function、保存 ZIP 构建产物，并通过 Neon 官方 API 发布 `werewolf` 函数。它会等待**本次部署**成为已完成的活动版本，再检查 `/api/health` 返回 Postgres 存储；成功后在工作流 Summary 输出 `API_BASE_URL`。
 
-按 [Neon Functions 快速开始](https://neon.com/docs/compute/functions/get-started) 登录 Neon CLI，并使用 `neon link` 关联目标项目和生产分支。CLI 可能打开浏览器授权；务必确认选中自己的项目。连接信息和 CLI 凭据只保存在本机或平台中，不提交到 GitHub。
+只有 GitHub 的 `main` 分支可以使用此工作流发布；手动选择其他分支会跳过发布。启用 `NEON_DEPLOY_ENABLED=true` 后，推送涉及 `neon/`、`worker/`、游戏引擎、依赖或发布脚本等匹配路径的修改才触发自动部署。自动部署依次使用 `NEON_BRANCH_ID`、`NEON_BRANCH`，都未设置时使用名称 `production`。工作流只查找已存在的精确匹配分支，**不会自动创建或删除数据库分支**，也不会修改 Pages 的仓库变量。
 
-```bash
-npx neon@latest link
-```
+若上传后状态不明，先在 Neon 控制台检查这次部署；健康检查失败时保留原 `API_BASE_URL`，排查后再切换网页。工作流使用的源码是 `.github/workflows/neon.yml` 和 `scripts/deploy-neon.mjs`。
 
-仓库的 `neon.ts` 指向 `neon/index.mjs`。完成关联后，可在仓库根目录发布：
-
-```bash
-npx neon@latest deploy
-```
-
-CLI 会自行打包配置中的源码；它不依赖上一步生成的 ZIP。也可使用已构建的单文件：
-
-```bash
-npx neon@latest functions deploy werewolf --src dist-neon/index.mjs --no-bundle
-```
-
-这两种方式选择其一。部署已有后端时，保持相同项目、分支和函数名。ZIP 是构建产物，不需要将它提交为 GitHub Pages 网站文件。
-
-后端使用以下环境变量：
+## 后端环境与健康检查
 
 | 变量 | 设置方式 |
 | --- | --- |
 | `DATABASE_URL` | Neon 为 Function 注入所在分支的数据库连接。它是私密凭据，不可放入前端配置、Pages 变量或源码。 |
-| `ALLOWED_ORIGINS` | 允许调用 API 的网页来源，多个值用逗号分隔。当前 `neon.ts` 配置为 `https://gold14526.github.io`；复制仓库或使用自定义域名时，修改 `functions.werewolf.env.ALLOWED_ORIGINS` 后再发布。 |
+| `ALLOWED_ORIGINS` | 允许调用 API 的网页来源，多个值用逗号分隔。当前工作流传入 `https://gold14526.github.io`；复制仓库或使用自定义域名时，修改 `.github/workflows/neon.yml` 的对应值后再发布。 |
 
 例如页面为 `https://alice.github.io/werewolf/`，来源应填 `https://alice.github.io`，不包含路径；自定义域名页面可填写 `https://play.example.com`。设置环境变量的方法见 [Neon Functions 环境变量](https://neon.com/docs/compute/functions/environment-variables)。
 
 Function 首次连接会在事务中初始化 `moonwolf_pg_meta` 和 `moonwolf_pg_entities` 两张表，结构见 `neon/schema.sql`；普通重新部署不会清空或重建已有数据。Cloudflare 的 `drizzle/` 迁移用于另一套 D1 后端，不应用到 Neon Postgres。
 
-发布成功后，记录 CLI 返回的 Function HTTPS 根地址。访问其 `/api/health`，应得到包含以下字段的 JSON：
+发布成功后，记录工作流 Summary 给出的 Function HTTPS 根地址。访问其 `/api/health`，应得到包含以下字段的 JSON：
 
 ```json
 {"ok":true,"service":"moonwolf","storage":"postgres","version":2}
@@ -64,6 +50,32 @@ Function 首次连接会在事务中初始化 `moonwolf_pg_meta` 和 `moonwolf_p
 4. 从 Pages 网址进入游戏。若浏览器之前手动配置过其他后端，在「联机设置」更新或清除旧值。
 
 `API_BASE_URL` 是公开地址，不是数据库连接串。所有玩家必须连接同一 Function 和同一生产数据库，才能共享匹配队列与房间。具体 Pages 发布步骤也见 [README](../README.md#部署到-github-pages)。
+
+## 可选：本地构建与 CLI 发布
+
+上面的 GitHub Actions 路径会自动构建，无需在自己电脑安装工具。若需要本地开发，安装 Node.js 22.13 或更新版本，在仓库根目录运行：
+
+```bash
+npm ci
+npm run build:neon
+```
+
+产物是 `dist-neon/index.mjs` 和 `dist-neon/werewolf.zip`；ZIP 根目录只有 `index.mjs`。构建会打包后端代码和所需依赖，不包含前端网页、数据库内容或连接凭据。静态网页仍由 `npm run build` 生成到 `dist/`，两种构建互不覆盖。Neon Functions 使用 Node.js 24 运行。
+
+如果已经使用 Neon CLI，可按 [官方快速开始](https://neon.com/docs/compute/functions/get-started) 登录并关联已有项目、分支，再发布仓库中的 `neon.ts` 配置：
+
+```bash
+npx neon@latest link
+npx neon@latest deploy
+```
+
+CLI 会自行打包 `neon/index.mjs`，不依赖预构建 ZIP。也可把发布命令改为：
+
+```bash
+npx neon@latest functions deploy werewolf --src dist-neon/index.mjs --no-bundle
+```
+
+CLI 路径的允许来源配置在 `neon.ts` 的 `functions.werewolf.env.ALLOWED_ORIGINS`。保持与网页来源、正式项目和分支一致；本地连接信息与凭据不提交到 GitHub。浏览器 GitHub 集成与 Actions 发布不依赖这条可选路径。
 
 ## 数据保存与恢复
 
