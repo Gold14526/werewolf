@@ -24,8 +24,8 @@ async function call(path,{method='GET',body,token}={}){
   return data;
 }
 const health=await call('/api/health');
-assert.equal(health.service,'moonwolf');assert.equal(health.storage,'d1');
-reports.push('production API and D1 storage available');
+assert.equal(health.service,'moonwolf');assert.ok(['d1','postgres'].includes(health.storage),'Persistent storage must be D1 or Postgres');
+reports.push(`production API and ${health.storage} storage available`);
 const stamp=Date.now().toString(36).slice(-4);
 const clients=await Promise.all(Array.from({length:12},(_,i)=>call('/api/session',{method:'POST',body:{name:`验收${stamp}-${i+1}`}})));
 const matches=await Promise.all(clients.map(c=>call('/api/match',{method:'POST',body:{},token:c.token})));

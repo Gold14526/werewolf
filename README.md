@@ -1,6 +1,6 @@
 # 狼人杀
 
-一个中文狼人杀网站：默认匹配 12 人标准局，支持自选角色开房、6 位随机房号、文字聊天和服务端裁判。源码由 GitHub 仓库保存，GitHub Pages 提供网站入口，Node.js 联机后端使用 SQLite 保存数据。生产部署需要为数据库挂载持久磁盘，服务重启后从同一数据库恢复房间和对局。另提供 Cloudflare Worker + D1 备选。
+一个中文狼人杀网站：默认匹配 12 人标准局，支持自选角色开房、6 位随机房号、文字聊天和服务端裁判。推荐将源码放在自己的 GitHub 仓库，GitHub Pages 提供网页，Neon Functions 提供联机 API，Postgres 保存房间与对局。后端实例回收或重新部署后，使用同一数据库恢复已提交的状态。另保留独立 Node + SQLite 和 Cloudflare Worker + D1 部署方式。
 
 界面与操作流程参考 QOJ 的杀人游戏大厅，改为狼人杀角色配置；游戏引擎与联机服务独立实现，不使用参考站的真实玩家信息、历史战绩或账号数据。
 
@@ -19,7 +19,7 @@
 
 ## 开始游戏
 
-完成下方 GitHub Pages 与持久化后端部署，并设置 `API_BASE_URL` 后，打开 Pages 发布的网址即可联机。代码保存在自己的 GitHub 仓库，实时对局数据保存在后端数据库，二者独立。仅部署静态页面时，真人匹配和共享房间尚不可用；本文提供部署方法，不代表后端已经上线。
+按 [Neon 部署说明](docs/NEON.md) 发布后端，再完成下方 GitHub Pages 部署并设置 `API_BASE_URL`，即可从自己的 Pages 网址联机。代码保存在 GitHub，实时对局数据保存在 Postgres，二者独立。仅部署静态页面时，真人匹配和共享房间尚不可用；本文提供部署方法，不代表后端已经上线。
 
 - **快速匹配：**点击「开始匹配」，12 名真人进入同一队列后自动开局。
 - **好友开房：**点击「自选配置开房」，选择角色和时限，再把 6 位房号或「复制邀请链接」得到的网址发给朋友。邀请链接形式为站点路径加 `?room=123456`，打开后会显示加入确认。
@@ -36,13 +36,14 @@
 npm start
 ```
 
-浏览器访问终端输出的地址。此时网页与联机 API 由同一个 Node 服务提供，不需要设置外部 API 地址。项目没有第三方运行依赖，无需先执行 `npm install`。
+浏览器访问终端输出的地址。此时网页与联机 API 由同一个 Node 服务提供，不需要设置外部 API 地址。这条本地 Node + SQLite 路径只使用 Node 内置模块，可直接启动；构建 Neon 后端或运行完整测试前需要 `npm ci` 安装依赖。
 
 数据库默认写入 `data/moonwolf.sqlite`，也可通过 `DATABASE_PATH` 指定路径。再次启动同一数据库即可恢复已保存状态。正式部署必须把数据库所在目录挂载到持久磁盘或 Docker 卷；容器内的临时目录、免费服务的易失磁盘和 GitHub Actions 工作目录都不能满足重启与重新部署后保留数据的要求。
 
-测试和生成 GitHub Pages 静态文件（测试使用 Node 内置 SQLite）：
+安装依赖、测试并生成 GitHub Pages 静态文件（持久化测试使用 Node 内置 SQLite 和本地 PGlite）：
 
 ```bash
+npm ci
 npm test
 npm run build
 ```
@@ -80,7 +81,7 @@ git push -u origin main
 
 | 名称 | 示例 |
 | --- | --- |
-| `API_BASE_URL` | 后端发布结果中的 HTTPS 根地址，例如 `https://你的服务名.onrender.com` |
+| `API_BASE_URL` | Neon Function 发布结果中的 HTTPS 根地址，或所选其他后端的 HTTPS 根地址。 |
 
 填写后端的 **HTTPS 站点根地址**，不要加 `/api`。重新运行 Pages 工作流后，所有访问者会默认使用这个后端。API 地址是公开配置，不是密钥。
 
@@ -88,13 +89,24 @@ git push -u origin main
 
 ## 部署联机服务
 
-### 独立 Node 服务
+### 推荐：Neon Functions + Postgres
+
+前端继续使用自己的 GitHub Pages，后端只需一个 Neon 项目。Neon Functions 执行联机 API，Postgres 持久保存状态，不需要购买常驻 Node 实例或挂载 SQLite 磁盘。免费计划有算力、调用次数和流量额度；额度用尽可能暂停服务，适合小规模组局，具体限制以 [Neon 官方计划](https://neon.com/docs/introduction/plans) 为准。
+
+```bash
+npm ci
+npm run build:neon
+```
+
+构建生成 `dist-neon/index.mjs` 及部署 ZIP；`neon.ts` 提供 Neon CLI 配置。部署步骤、环境变量、数据库恢复语义和验证范围见 [docs/NEON.md](docs/NEON.md)。构建成功仅说明产物已生成，仍需发布 Function、验证 `/api/health`，并将地址配置到 GitHub Pages。
+
+### 可选：独立 Node + SQLite 服务
 
 在支持长时间运行 Node.js 或 Docker、并提供持久磁盘的主机运行 `npm start`。它同时托管前端和 API；不需要 GitHub Pages 时可直接分享该服务地址。`DATABASE_PATH` 必须指向持久磁盘上的 SQLite 文件。代码重新拉取或镜像替换不会迁移数据库，重新发布时必须继续挂载同一份磁盘。
 
 当前 SQLite 后端只运行一个服务实例。多实例需要另外实现独立持久数据库、并发控制与统一房间路由，不能让多个实例各自保存一份房间状态，也不能直接共用此实现的数据库文件。
 
-### 使用 Render
+### 可选：使用 Render
 
 本项目提供 `render.yaml`，可连接 GitHub 仓库后作为 Render Blueprint 导入。配置使用原生 Node.js 24、`starter` 付费实例，并挂载 1 GB 持久磁盘到 `/var/data`；构建命令为 `npm ci --omit=dev`，启动命令为 `node server/index.mjs`。实际套餐、磁盘费用和最终账单以平台创建页面为准，需账号所有者确认费用并完成购买；提交配置文件本身不会代付或开通服务。
 
@@ -117,7 +129,7 @@ ALLOWED_ORIGINS=https://alice.github.io,https://play.example.com
 
 部署完成后，打开 `https://你的后端地址/api/health` 检查服务状态，然后把后端地址填到 GitHub 的 `API_BASE_URL`。GitHub Pages 使用 HTTPS，后端也必须启用 HTTPS，否则浏览器会阻止混合内容请求。
 
-### 使用自己的服务器
+### 可选：使用自己的服务器
 
 可以用进程管理器持续运行 `npm start`，在前面配置 HTTPS 反向代理；也可以使用 Docker：
 
@@ -138,7 +150,7 @@ docker run --name moonwolf --restart unless-stopped \
 
 ### Cloudflare Worker + D1 备选
 
-当前部署过程中，Cloudflare 登录或注册页面返回 403，尚未完成该账号下的后端部署。以下配置保留供账号访问恢复后使用；现阶段可选择上方的 Node + SQLite 持久磁盘方案。
+如果使用自己的 Cloudflare 账号，也可部署 Worker + D1；它与 Neon 是两套独立后端，所有玩家应统一连接选定的一套。
 
 `worker/` 是联机后端，`db/schema.ts` 定义持久化结构，`drizzle/` 保存已生成的数据库迁移。Worker 同时包含网页和 API，D1 保存房间、会话和对局数据。GitHub Actions 可以在源码更新后自动测试、迁移数据库并发布 Worker。
 
@@ -167,30 +179,32 @@ npm run build:cloudflare
 
 构建输出 `dist/server/index.js`，包含网页和 API。数据库通过 `DB` 绑定提供给 Worker；工作流生成的 Wrangler 配置指向 `drizzle/` 迁移目录。数据库结构有变化时运行 `npm run db:generate`，审查并提交新迁移；不要修改已经应用的迁移文件。
 
-`npm run build` 生成 GitHub Pages 静态文件，`npm run build:cloudflare` 生成 Worker，两者都写入 `dist/`。分别构建和发布，不要混用输出。游戏运行不依赖第三方 Node 包。
+`npm run build` 生成 GitHub Pages 静态文件，`npm run build:cloudflare` 生成 Worker，两者都写入 `dist/`。分别构建和发布，不要混用输出。Neon 构建使用单独的 `dist-neon/` 目录。
 
 如果使用自定义域名，须把其完整来源加入 `ALLOWED_ORIGINS`。例如网页地址 `https://play.example.com/werewolf/` 对应来源 `https://play.example.com`，不包含路径。
 
 ### 数据保存与容量
 
-| 项目 | Node + SQLite 持久磁盘版 | Worker + D1 备选 |
-| --- | --- | --- |
-| 房间、身份、会话、聊天、历史和战绩 | 存入 SQLite；重启或重新发布时继续挂载同一数据库即可恢复 | 存入 D1，Worker 重启或重新发布后保留 |
-| 活动房间 / 会话上限 | 1000 / 10000 | 20 / 500 |
-| 已结束对局 | 最近 100 场 | 最近 20 场 |
-| 每房间聊天 | 最近 2000 条 | 最近 400 条；房间记录过大时进一步移除旧消息 |
+| 项目 | Neon Functions + Postgres | Node + SQLite 持久磁盘版 | Worker + D1 备选 |
+| --- | --- | --- | --- |
+| 房间、身份、会话、聊天、历史和战绩 | 存入 Postgres，实例回收或重新发布后从同一数据库读取 | 存入 SQLite；重启或重新发布时继续挂载同一数据库即可恢复 | 存入 D1，Worker 重启或重新发布后保留 |
+| 活动房间 / 会话上限 | 20 / 500 | 1000 / 10000 | 20 / 500 |
+| 已结束对局 | 至多最近 20 场，容量不足时减少 | 最近 100 场 | 至多最近 20 场，容量不足时减少 |
+| 每房间聊天 | 最近 400 条；房间记录过大时进一步移除旧消息 | 最近 2000 条 | 最近 400 条；房间记录过大时进一步移除旧消息 |
+
+Neon 每次业务请求都在 Postgres 事务内锁定元数据、读取状态并提交修改，提交成功后才返回成功；并发实例通过数据库锁协调。连接或写入失败时返回 503，不切换为内存存储。实例替换本身不会重置阶段计时；全站业务活动中断超过 60 秒时，下一次业务请求把整个间隔视为暂停，恢复阶段剩余时间且至少留 30 秒操作时间，并提供 2 分钟重连宽限。健康检查不推进游戏时钟；若其他玩家仍在请求，单个离线房间不会因此暂停。详见 [Neon 恢复与验证说明](docs/NEON.md#数据保存与恢复)。
 
 Node 服务在成功操作响应前提交 SQLite 事务；游戏计时推进也会保存。服务重启从最后一次已提交的状态恢复，停机时间不计入阶段倒计时和离线清理期限；进行中阶段恢复剩余时长，至少留 30 秒操作时间，房间和会话另有 2 分钟重连宽限。存储写入失败或出现状态冲突时服务停止接受操作并返回 503，不会把未保存的操作报告为成功。修复存储问题后需重启服务。
 
-D1 版将房间聊天控制在约 220 KiB 的房间记录范围内，全部业务状态上限为 10 MiB，超出容量时会拒绝新增操作并提示稍后重试。适合朋友组局和小规模匹配；大量公开用户需要进一步拆分存储和扩容。
+Neon 与 D1 版会在房间记录超过约 220 KiB 时裁剪旧聊天；全部业务状态上限为 10 MiB，超出容量时会拒绝操作并提示稍后重试。这些是应用自身的限制，与托管平台的数据库额度不同。适合朋友组局和小规模匹配；大量公开用户需要进一步拆分存储和扩容。
 
-保留上限和正常运行期间的清理规则仍然生效：等待中的玩家超过 2 分钟无活动会移出房间，房间整体闲置超过 30 分钟会清理，会话闲置超过 24 小时失效。重启本身不会清空对局，持久化也不表示无限保留历史。D1 版由客户端请求推进已到期阶段；没有 Node 版的进程停机恢复计时机制。
+保留上限和正常运行期间的清理规则仍然生效：等待中的玩家超过 2 分钟无活动会移出房间，房间整体闲置超过 30 分钟会清理，会话闲置超过 24 小时失效；Neon 和 Node 恢复时适用上述暂停与宽限。已按规则清理的数据不会因为重启重新出现。Neon 与 D1 版由客户端请求推进已到期阶段；D1 版没有 Neon 的全站空闲恢复机制。持久化不表示无限保留历史。
 
 公开房间的结束记录可由任意会话查看；私密房间的结束记录仅该局参与者可查看。结算后才公开所有身份、保留的狼队聊天和夜间行动记录。夜间复盘包括守护目标、每名狼人的刀人票与最终刀口、查验目标与结果、女巫用药情况。
 
-战绩跟随玩家会话累计，昵称不是唯一账号，也不支持跨设备凭昵称找回。重启后应在原浏览器标签页恢复会话；清除浏览器会话、删除数据库或换到另一台未挂载原磁盘的服务器，不会自动找回原身份。请定期备份数据库；持久磁盘能跨进程重启保留数据，不替代灾难恢复备份。
+战绩跟随玩家会话累计，昵称不是唯一账号，也不支持跨设备凭昵称找回。重启后应在原浏览器标签页恢复会话；清除浏览器会话、删除或更换数据库后，不会自动找回原身份。请定期备份数据库；数据库持久化不替代灾难恢复备份。
 
-可在服务运行时生成一致的 SQLite 备份：
+使用可选 Node + SQLite 服务时，可在运行中生成一致的备份（Neon 的 Postgres 备份方法见部署说明）：
 
 ```bash
 npm run backup -- /absolute/new-backup.sqlite
@@ -254,6 +268,9 @@ SQLite 是数据库文件，文件必须位于平台的持久磁盘上。检查 
 | --- | --- |
 | `web/` | 页面、样式、交互及静态配置。 |
 | `web/engine.js` | 浏览器体验与服务端共用的规则引擎。 |
+| `neon/index.mjs`、`neon/store.mjs`、`neon/schema.sql` | Neon Function 入口、Postgres 事务与恢复逻辑、数据库结构。 |
+| `neon.ts`、`scripts/build-neon.mjs` | Neon CLI 配置及 Function 构建。 |
+| `docs/NEON.md` | GitHub Pages + Neon 部署、恢复语义及验证范围。 |
 | `server/index.mjs` | 独立 Node 联机服务及 SQLite 持久化。 |
 | `worker/` | Cloudflare Worker API、并发控制和 D1 数据存储。 |
 | `db/schema.ts`、`drizzle/` | 数据库结构和版本化迁移。 |
@@ -265,6 +282,6 @@ SQLite 是数据库文件，文件必须位于平台的持久磁盘上。检查 
 | `.github/workflows/cloudflare.yml` | Cloudflare Worker 测试、D1 迁移与自动发布。 |
 | `Dockerfile`、`render.yaml`、`compose.yaml` | 带持久数据卷的后端部署配置。 |
 
-部署平台的使用说明：[GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)、[GitHub Pages 工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[Cloudflare GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、[Cloudflare D1](https://developers.cloudflare.com/d1/get-started/)、[Render Web Services](https://render.com/docs/web-services)。
+部署平台的使用说明：[GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)、[GitHub Pages 工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[Neon Functions](https://neon.com/docs/compute/functions/overview)、[Neon 计划与额度](https://neon.com/docs/introduction/plans)、[Cloudflare GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、[Cloudflare D1](https://developers.cloudflare.com/d1/get-started/)、[Render Web Services](https://render.com/docs/web-services)。
 
 代码按 [MIT License](LICENSE) 开源。

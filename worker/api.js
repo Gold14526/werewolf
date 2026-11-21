@@ -29,7 +29,7 @@ function rate(state, key, count, duration, now) {
 }
 function sessionFor(state, hash, now) {
   const session = hash && state.sessions.get(hash);
-  if (!session || now - session.lastSeen > 24 * HOUR) throw fail('登录状态已过期，请重新连接', 401);
+  if (!session || (now >= (session.recoveryUntil ?? 0) && now - session.lastSeen > 24 * HOUR)) throw fail('登录状态已过期，请重新连接', 401);
   // Keep normal polling read-only between heartbeats to reduce contention.
   if (now - session.lastSeen >= 10000) session.lastSeen = now;
   return session;
@@ -153,20 +153,20 @@ function visibleHistory(history, session) { return history.visibility === 'publi
 function cleanup(state, now) {
   for (const room of state.rooms.values()) {
     const lastSeen = Math.max(room.lastActive, ...room.players.map(p => sessionById(state, p.id)?.lastSeen ?? 0));
-    if (now - lastSeen > 30 * MINUTE) {
+    if (now >= (room.recoveryUntil ?? 0) && now - lastSeen > 30 * MINUTE) {
       for (const p of room.players) { const s = sessionById(state, p.id); if (s?.roomCode === room.code) s.roomCode = null; }
       state.rooms.delete(room.code); continue;
     }
     if (!room.game) {
       for (const p of [...room.players]) {
         const s = sessionById(state, p.id);
-        if (!s || now - s.lastSeen > 2 * MINUTE) dropMember(state, room, s ?? { id: p.id, name: p.name }, now);
+        if (!s || (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 2 * MINUTE)) dropMember(state, room, s ?? { id: p.id, name: p.name }, now);
       }
     } else if (room.game.phase !== 'finished' && now >= room.game.deadline) advance(room.game, now);
     trimRoom(room);
     recordFinished(state, room, now);
   }
-  for (const [key, s] of state.sessions) if (now - s.lastSeen > 24 * HOUR) state.sessions.delete(key);
+  for (const [key, s] of state.sessions) if (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 24 * HOUR) state.sessions.delete(key);
   for (const [key, b] of state.limits) if (now >= b.until) state.limits.delete(key);
 }
 
@@ -184,7 +184,7 @@ function handleState(state, request, body, context) {
       if (state.standings.has(s.id)) state.standings.get(s.id).name = name;
       return { status: 200, body: { token: rawToken, player: { id: s.id, name: s.name } } };
     }
-    rate(state, `session:${ipHash}`, 60, HOUR, now);
+    rate(state, `session:${ipHash}`, context.sessionLimit ?? 60, HOUR, now);
     if (state.sessions.size >= MAX_SESSIONS) throw fail('当前在线玩家较多，请稍后重试', 503);
     const s = { id: id(), name: cleanName(body.name), roomCode: null, createdAt: now, lastSeen: now };
     state.sessions.set(newTokenHash, s);
@@ -260,7 +260,7 @@ function handleState(state, request, body, context) {
   return { body: { room: serialize(state, room, session, now) } };
 }
 
-/** Fetch-compatible API entry point. The Site worker supplies env.DB. */
+/** Fetch-compatible API. Workers supply env.DB; other runtimes supply STATE_STORE. */
 export async function handleApi(request, env) {
   const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin' });
   const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers });
@@ -273,10 +273,20 @@ export async function handleApi(request, env) {
     headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     headers.set('Access-Control-Max-Age', '600');
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (!env.DB?.prepare) throw fail('联机数据库尚未就绪', 503);
+    const store = env.STATE_STORE;
+    if (store ? typeof store.withState !== 'function' || typeof store.health !== 'function' : !env.DB?.prepare) throw fail('联机数据库尚未就绪', 503);
+    // Driver diagnostics can contain SQL, connection strings or private state.
+    // Only application errors carrying an explicit HTTP status cross the API.
+    const storageCall = async callback => {
+      try { return await callback(); }
+      catch (error) {
+        if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) throw error;
+        throw fail('联机服务暂时不可用，请稍后重试', 503);
+      }
+    };
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      await env.DB.prepare('SELECT id FROM moonwolf_meta LIMIT 1').all();
-      return response({ ok: true, service: 'moonwolf', storage: 'd1', version: 2 });
+      await storageCall(() => store ? store.health() : env.DB.prepare('SELECT id FROM moonwolf_meta LIMIT 1').all());
+      return response({ ok: true, service: 'moonwolf', storage: store?.storage ?? 'd1', version: 2 });
     }
     let body = {};
     if (request.method === 'POST') {
@@ -297,12 +307,26 @@ export async function handleApi(request, env) {
     if (authorization && !rawToken) throw fail('登录状态无效，请重新连接', 401);
     const newToken = !rawToken && url.pathname === '/api/session' ? token() : '';
     const context = {
-      now: Date.now(), path: url.pathname, rawToken,
+      now: typeof env.CLOCK === 'function' ? env.CLOCK() : Date.now(), path: url.pathname, rawToken,
       hash: rawToken ? await digest(rawToken) : '', newToken,
       newTokenHash: newToken ? await digest(newToken) : '',
-      ipHash: await digest(request.headers.get('CF-Connecting-IP') || 'local'),
+      // CF-Connecting-IP is trusted only when the request actually runs in the
+      // Cloudflare Worker. A public Neon caller could forge that header.
+      ipHash: await digest(store ? 'shared-session-creation' : request.headers.get('CF-Connecting-IP') || 'local'),
+      sessionLimit: store ? 240 : 60,
     };
-    const result = await withState(env.DB, state => handleState(state, request, body, context));
+    const mutate = state => {
+      try { return handleState(state, request, body, context); }
+      catch (error) {
+        // The shared game engine throws ordinary validation Errors. Mark these
+        // while inside the callback so database errors remain distinguishable.
+        if (!error.status) throw fail(error.message || '操作无效', 400);
+        throw error;
+      }
+    };
+    const result = await storageCall(() => store
+      ? store.withState(mutate, { now: context.now })
+      : withState(env.DB, mutate));
     return response(result.body, result.status || 200);
   } catch (error) {
     const status = error.status || (error.message?.includes('D1') || error.message?.includes('SQLITE') ? 503 : 400);

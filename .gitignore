@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-neon/
+.neon
 .env
 .env.*
 !.env.example

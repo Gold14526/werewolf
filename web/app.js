@@ -20,7 +20,7 @@ const badge = role => `<span class="badge ${role==='wolf'?'wolf':role==='village
 const roleTags = config => roleKeys.filter(r=>config.roles[r]).map(r=>`<span class="badge ${r==='wolf'?'wolf':r==='villager'?'villager':'god'}">${config.roles[r]} ${escape(ROLE_INFO[r].name)}</span>`).join(' ');
 const resultLabel = winner => winner==='wolf'?'狼人胜利':winner==='good'?'好人胜利':'平局';
 const formatTime = at => at ? new Date(at).toLocaleString('zh-CN',{hour12:false}) : '—';
-let toastTimer, lastRoomJson='', pollLock=false, botTimer=0, historyTick=0;
+let toastTimer, lastRoomJson='', pollLock=false, botTimer=0, nextPollAt=0, lastLobbyRefreshAt=0;
 let connectPromise=null, nextReconnectAt=0, retryDelay=5000, networkRevision=0, inviteShown=false;
 
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3500);}
@@ -125,13 +125,18 @@ async function connect({quiet=false}={}){
   })();
   try{return await connectPromise;}finally{connectPromise=null;}
 }
+// Keep one polling stream: room requests also refresh the session heartbeat.
+// Background tabs still check in well before the server's two-minute idle limit.
+function pollDelay(){return document.visibilityState==='hidden'?(state.room?15000:45000):(state.room?3000:10000);}
 async function refreshData(force=false){
   if(!state.online||state.demo||pollLock)return;pollLock=true;
   const revision=networkRevision;
   try{
     const r=await request('/api/room');if(revision!==networkRevision||state.demo)return;let changed=false;const json=JSON.stringify(r.room);
     if(json!==lastRoomJson){state.room=r.room;lastRoomJson=json;changed=true;}
-    if(force||++historyTick%6===0){
+    const lobbyVisible=document.visibilityState!=='hidden'&&['lobby','history'].includes(state.page);
+    if(force||(lobbyVisible&&Date.now()-lastLobbyRefreshAt>=30000)){
+      lastLobbyRefreshAt=Date.now();
       const results=await Promise.allSettled([request('/api/rooms'),request('/api/history'),request('/api/stats')]);
       if(revision!==networkRevision||state.demo)return;
       if(results[0].status==='fulfilled')state.rooms=results[0].value.rooms||[];
@@ -141,10 +146,10 @@ async function refreshData(force=false){
     }
     if(state.pollFailures){state.pollFailures=0;changed=true;}
     if(changed)render();
-  }catch(e){if(revision!==networkRevision)return;state.pollFailures++;if(e.status===401||state.pollFailures>=3){state.online=false;nextReconnectAt=Date.now()+1000;toast('连接中断，正在恢复会话');render();}}finally{pollLock=false;}
+  }catch(e){if(revision!==networkRevision)return;state.pollFailures++;if(e.status===401||state.pollFailures>=3){state.online=false;nextReconnectAt=Date.now()+1000;toast('连接中断，正在恢复会话');render();}}finally{pollLock=false;nextPollAt=Date.now()+pollDelay();}
 }
 function ensureOnline(){if(state.demo)throw new Error('请先退出本地试玩，再使用联机功能');if(!state.online)throw new Error('正在恢复联机连接，请稍后重试，或点击「立即重连」');}
-async function mutation(path,data={}){ensureOnline();networkRevision++;try{const r=await request(path,data);networkRevision++;if('room'in r){state.room=r.room;lastRoomJson=JSON.stringify(r.room);}render();return r;}catch(error){if(error.status===401){state.online=false;nextReconnectAt=Date.now()+1000;render();}throw error;}}
+async function mutation(path,data={}){ensureOnline();networkRevision++;try{const r=await request(path,data);networkRevision++;if('room'in r){state.room=r.room;lastRoomJson=JSON.stringify(r.room);}nextPollAt=Date.now()+pollDelay();render();return r;}catch(error){if(error.status===401){state.online=false;nextReconnectAt=Date.now()+1000;render();}throw error;}}
 function settingsModal(){modal('联机设置',`<p class="muted">填写游戏服务器的完整地址。所有玩家使用同一服务器，即可共享匹配队列与房间。</p><form id="settings-form"><label class="field"><span>服务器地址</span><input id="api-base" class="input" type="url" value="${escape(state.apiBase)}" placeholder="https://your-server.example.com"><small class="muted">留空会尝试连接当前网站的服务器。</small></label><p class="form-error" id="settings-error"></p><button class="btn primary" type="submit">保存并连接</button></form>`);}
 function profileModal(){modal('设置玩家昵称',`<form id="profile-form"><label class="field"><span>昵称（1–16 字）</span><input class="input" id="player-name" value="${escape(state.name)}" maxlength="16" required></label><p class="small muted">同一浏览器标签页会保留你的座位；游戏进行中不能修改昵称。</p><p class="form-error" id="profile-error"></p><button class="btn primary" type="submit">保存昵称</button></form>`);}
 function joinModal(code=state.pendingInvite||''){modal(code?'加入好友房间':'输入房号加入',`<form id="join-form"><label class="field"><span>6 位随机房号</span><input class="input room-code-input" id="join-code" name="code" value="${escape(code)}" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="请输入 6 位数字" required></label><p class="small muted">你将以「${escape(state.name)}」加入。可在页面右上角修改昵称。</p><p class="form-error" id="join-error"></p><button class="btn primary full" type="submit">加入房间</button></form>`);}
@@ -244,8 +249,12 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape')closeModal();
   if(e.key==='Tab'&&state.modal){const list=[...document.querySelectorAll('.modal button,.modal input,.modal select,.modal textarea')].filter(x=>!x.disabled);if(!list.length)return;const first=list[0],last=list.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}
 });
-setInterval(()=>{updateClock();demoTick();},500);
-setInterval(()=>{if(state.demo)return;if(state.online)refreshData();else if(!state.checking&&!connectPromise&&Date.now()>=nextReconnectAt)connect({quiet:true});},1500);
+setInterval(()=>{
+  updateClock();demoTick();
+  if(state.demo||state.busy||pollLock)return;
+  if(state.online){if(Date.now()>=nextPollAt)refreshData();}
+  else if(!state.checking&&!connectPromise&&Date.now()>=nextReconnectAt)connect({quiet:true});
+},500);
 window.addEventListener('online',()=>{if(!state.demo&&!state.online)connect({quiet:true});});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!state.demo){if(state.online)refreshData(true);else connect({quiet:true});}});
+document.addEventListener('visibilitychange',()=>{nextPollAt=Date.now()+pollDelay();if(document.visibilityState==='visible'&&!state.demo){if(state.online)refreshData();else connect({quiet:true});}});
 render();connect();

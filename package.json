@@ -11,14 +11,23 @@
     "build": "node scripts/build.mjs",
     "build:hosted": "node scripts/build-hosted.mjs",
     "build:cloudflare": "node scripts/build-hosted.mjs --portable",
+    "build:neon": "node scripts/build-neon.mjs",
     "db:generate": "drizzle-kit generate",
     "start": "node server/index.mjs",
     "backup": "node scripts/backup.mjs",
     "test": "node --test tests/*.test.js"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.17",
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "0.45.2",
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
     "wrangler": "4.92.0"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/functions": "^0.11.0",
+    "pg": "^8.23.1"
   }
 }

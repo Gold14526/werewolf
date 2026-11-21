@@ -33,13 +33,13 @@ try {
   if (error.code !== 'ENOENT') throw error;
 }
 
-const directories = ['web', 'worker', 'server', 'scripts', 'tests', 'db', 'drizzle', '.github', 'docs'];
+const directories = ['web', 'worker', 'server', 'scripts', 'tests', 'neon', 'db', 'drizzle', '.github', 'docs'];
 const rootFiles = [
   'package.json', 'package-lock.json', 'README.md', 'LICENSE',
   'Dockerfile', 'compose.yaml', 'render.yaml', 'drizzle.config.ts', '.gitignore', '.dockerignore', '.env.example',
-  'wrangler.example.json', 'wrangler.example.jsonc', 'wrangler.jsonc.example',
+  'wrangler.example.json', 'wrangler.example.jsonc', 'wrangler.jsonc.example', 'neon.ts',
 ];
-const excluded = new Set(['.git', '.openai', 'node_modules', 'dist', 'coverage', '.wrangler', '.DS_Store']);
+const excluded = new Set(['.git', '.openai', 'node_modules', 'dist', 'dist-neon', 'coverage', '.wrangler', '.neon', '.DS_Store']);
 const extensions = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.css', '.html', '.svg', '.json', '.jsonc', '.yml', '.yaml', '.md', '.sql', '.txt', '.sh', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.woff', '.woff2']);
 const files = [];
 

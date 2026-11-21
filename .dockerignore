@@ -2,6 +2,8 @@
 .openai
 node_modules
 dist
+dist-neon
+.neon
 data
 backups
 .env
