@@ -80,18 +80,18 @@ function game(config = NEW_CONFIG) {
   return createGame(Array.from({ length: count }, (_, i) => ({ id: `persist-${i + 1}`, name: `持久${i + 1}`, seat: i + 1 })), config, { now: START, random: () => 0.999 });
 }
 const rolePlayer = (g, role) => g.players.find(p => p.role === role);
-const submit = (g, id, action) => act(g, id, action, g.deadline - 1);
+const submit = (g, id, action) => act(g, id, action, Math.min(g.deadline, g.inactivityDeadline ?? Infinity) - 1);
 const plain = object => JSON.parse(JSON.stringify(object));
 function withoutDeadline(g) { const result = plain(g); delete result.deadline; return result; }
 
 function finishNight(g, victim = null) {
   let stages = 0;
-  while (['guard', 'wolf', 'seer', 'witch'].includes(g.phase)) {
+  while (g.phase === 'night') {
     assert.ok(stages++ < 5, 'night must leave its fixed stages');
-    const phase = g.phase;
     for (const p of g.players) {
       const view = viewGame(g, p.id);
       if (!view.actionable || view.submitted) continue;
+      const phase = view.action.type;
       submit(g, p.id, {
         type: phase,
         targetId: phase === 'wolf' ? victim : null,
@@ -167,7 +167,7 @@ test('Postgres reopen preserves partial sheriff signup and hidden first-night de
   assert.equal(viewGame(recovered, candidate.id).sheriffId, candidate.id);
 });
 
-test('Postgres reopen keeps acknowledged sheriff ballots without allowing a second vote', async t => {
+test('Postgres reopen keeps acknowledged sheriff ballots and accepts changes through the restored voting deadline', async t => {
   const store = await diskStore(t);
   const g = game();
   finishNight(g);
@@ -181,11 +181,14 @@ test('Postgres reopen keeps acknowledged sheriff ballots without allowing a seco
   const recovered = await store.reopen();
   assert.deepEqual(withoutDeadline(recovered), withoutDeadline(g));
   assert.equal(viewGame(recovered, voter.id).submitted, true);
-  assert.throws(() => submit(recovered, voter.id, { type: 'sheriff_vote', targetId: candidates[1].id }), /已经|提交/);
+  assert.equal(viewGame(recovered, voter.id).myVoteTargetId, candidates[0].id);
+  submit(recovered, voter.id, { type: 'sheriff_vote', targetId: candidates[1].id });
+  assert.equal(viewGame(recovered, voter.id).myVoteTargetId, candidates[1].id);
   for (const p of recovered.players) {
     if (recovered.phase !== 'sheriff_vote') break;
     if (viewGame(recovered, p.id).actionable) submit(recovered, p.id, { type: 'sheriff_vote', targetId: candidates[0].id });
   }
+  advance(recovered, recovered.deadline);
   assert.equal(viewGame(recovered, voter.id).sheriffId, candidates[0].id);
   beginDiscussion(recovered);
   assert.equal(recovered.speechQueue.at(-1), candidates[0].id, 'restored sheriff still speaks last');
@@ -207,6 +210,7 @@ test('Postgres reopen retains the badge, used knight duel and revealed fool rest
     if (g.phase !== 'vote') break;
     if (viewGame(g, p.id).actionable) submit(g, p.id, { type: 'vote', targetId: p.id === fool.id ? null : fool.id });
   }
+  advance(g, g.deadline);
   assert.equal(g.players.find(p => p.id === fool.id).alive, true);
   assert.equal(viewGame(g, sheriff.id).players.find(p => p.id === fool.id).role, 'fool');
   await store.save(g);
@@ -227,15 +231,21 @@ test('Postgres reopens a pre-expansion snapshot without requiring sheriff or new
   const g = game(STANDARD_CONFIG);
   const oldKeys = new Set(['config', 'phase', 'round', 'deadline', 'winner', 'players', 'log', 'audit', 'actions', 'night', 'previousGuard', 'potions', 'investigations', 'pendingHunters', 'hunterUsed', 'resume', 'currentSpeakerId', 'speechQueue', 'lastWordsQueue', 'runoff', 'voteTargets', 'eventSequence']);
   for (const key of Object.keys(g)) if (!oldKeys.has(key)) delete g[key];
-  delete g.config.sheriff;
+  g.phase = 'guard';
+  g.deadline = START + g.config.nightSeconds * 1000;
+  delete g.night.windows;
+  for (const field of ['otherNightSeconds', 'witchSelfSave', 'shuffleSeats', 'sheriff']) delete g.config[field];
   for (const role of ['wolfKing', 'whiteWolfKing', 'fool', 'knight']) delete g.config.roles[role];
   for (const p of g.players) {
     for (const key of Object.keys(p)) if (!['id', 'name', 'seat', 'role', 'alive'].includes(key)) delete p[key];
   }
   await store.save(g);
   const recovered = await store.reopen();
-  assert.equal(recovered.phase, 'guard');
-  assert.equal(viewGame(recovered, rolePlayer(recovered, 'guard').id).actionable, true);
+  advance(recovered, store.now);
+  assert.equal(recovered.phase, 'night');
+  assert.equal(recovered.config.otherNightSeconds, 30);
+  assert.equal(viewGame(recovered, rolePlayer(recovered, 'wolf').id).action.type, 'wolf');
+  assert.equal(viewGame(recovered, rolePlayer(recovered, 'guard').id).actionable, false, 'elapsed guard time exceeds the new 30-second window');
   finishNight(recovered);
   beginDiscussion(recovered);
   assert.equal(viewGame(recovered, recovered.players[0].id).sheriffId, null);

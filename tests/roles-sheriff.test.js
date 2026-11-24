@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { STANDARD_CONFIG, createGame, validateConfig, act, advance, viewGame, canChat, isWolfRole } from '../web/engine.js';
+import { STANDARD_CONFIG, createGame, validateConfig, act, advance, viewGame, canChat } from '../web/engine.js';
 
 const ALL = { roles: { wolf: 1, wolfKing: 1, whiteWolfKing: 1, villager: 4, seer: 1, witch: 1, hunter: 1, fool: 1, knight: 1, guard: 1 }, victory: 'all', nightSeconds: 30, daySeconds: 60 };
 function game(config = ALL) {
@@ -8,12 +8,14 @@ function game(config = ALL) {
   return createGame(Array.from({ length: n }, (_, i) => ({ id: `p${i + 1}`, name: `玩家${i + 1}`, seat: i + 1 })), config, { now: 1000, random: () => .999 });
 }
 const who = (g, role) => g.players.find(p => p.role === role);
-const send = (g, id, action) => act(g, id, action, g.deadline - 1);
+const send = (g, id, action) => act(g, id, action, Math.min(g.deadline, g.inactivityDeadline ?? Infinity) - 1);
 function night(g, options = {}) {
-  for (let i = 0; i < 4 && ['guard', 'wolf', 'seer', 'witch'].includes(g.phase); i++) {
-    const phase = g.phase;
-    for (const p of g.players.filter(p => p.alive && (phase === 'wolf' ? isWolfRole(p.role) : p.role === phase))) {
-      send(g, p.id, { type: phase, targetId: options[phase] ?? null, ...(phase === 'witch' ? { choice: options.witch ? 'poison' : 'skip' } : {}) });
+  while (g.phase === 'night') {
+    for (const p of g.players) {
+      const { action } = viewGame(g, p.id);
+      if (!action) continue;
+      send(g, p.id, { type: action.type, targetId: options[action.type] ?? null,
+        ...(action.type === 'witch' ? { choice: options.witch ? 'poison' : 'skip' } : {}) });
     }
     advance(g, g.deadline);
   }
@@ -26,6 +28,7 @@ function speeches(g, phase = 'discussion') {
 function exile(g, targetId) {
   speeches(g);
   for (const p of g.players) if (g.phase === 'vote' && viewGame(g, p.id).actionable) send(g, p.id, { type: 'vote', targetId: p.id === targetId ? null : targetId });
+  advance(g, g.deadline);
 }
 function signup(g, candidates) {
   assert.equal(g.phase, 'sheriff_signup');
@@ -55,7 +58,6 @@ test('special wolves count toward configuration balance and good specials count 
 
 test('kings participate in wolf stage, hidden team chat and seer alignment without exact-role leak', () => {
   const g = game();
-  advance(g, g.deadline);
   const kings = [who(g, 'wolfKing'), who(g, 'whiteWolfKing')], good = who(g, 'villager');
   for (const king of kings) {
     assert.equal(viewGame(g, king.id).actionable, true);
@@ -64,7 +66,6 @@ test('kings participate in wolf stage, hidden team chat and seer alignment witho
     assert.equal(viewGame(g, good.id).players.find(p => p.id === king.id).role, undefined);
     send(g, king.id, { type: 'wolf', targetId: good.id });
   }
-  advance(g, g.deadline);
   send(g, who(g, 'seer').id, { type: 'seer', targetId: kings[0].id }); advance(g, g.deadline);
   assert.equal(viewGame(g, who(g, 'seer').id).privateInfo.results[0].team, 'wolf');
   assert.equal(viewGame(g, who(g, 'seer').id).privateInfo.results[0].role, undefined);
@@ -72,7 +73,7 @@ test('kings participate in wolf stage, hidden team chat and seer alignment witho
 
 test('a wolfKing-only deck retains night wolf stage and side victory', () => {
   const g = game({ roles: { wolfKing: 1, villager: 4, knight: 1 }, victory: 'side' });
-  assert.equal(g.phase, 'wolf');
+  assert.equal(g.phase, 'night');
   const king = who(g, 'wolfKing'); night(g);
   assert.equal(g.winner, null);
   exile(g, king.id);
@@ -145,6 +146,7 @@ test('signup keeps pending first-night death secret, candidates speak and origin
   speeches(g, 'sheriff_speech'); assert.equal(g.phase, 'sheriff_vote');
   assert.equal(viewGame(g, a.id).actionable, false);
   for (const id of [...g.sheriffVoters]) send(g, id, { type: 'sheriff_vote', targetId: a.id });
+  advance(g, g.deadline);
   assert.equal(g.sheriffId, a.id); assert.equal(victim.alive, false); assert.equal(g.phase, 'lastwords');
   speeches(g, 'lastwords'); assert.equal(g.phase, 'discussion'); assert.equal(g.speechQueue.at(-1), a.id);
 });
@@ -171,9 +173,11 @@ test('sheriff ties get one runoff then permanently lose badge, timeout advances 
   const g = game({ roles: { wolf: 1, villager: 3, seer: 1, fool: 1 }, sheriff: true }); night(g);
   const [a, b] = [who(g, 'seer').id, who(g, 'fool').id]; signup(g, [a, b]); speeches(g, 'sheriff_speech');
   for (const [i, id] of [...g.sheriffVoters].entries()) send(g, id, { type: 'sheriff_vote', targetId: i % 2 ? a : b });
+  advance(g, g.deadline);
   assert.equal(g.phase, 'sheriff_speech'); assert.equal(g.sheriffRunoff, true);
   speeches(g, 'sheriff_speech');
   for (const [i, id] of [...g.sheriffVoters].entries()) send(g, id, { type: 'sheriff_vote', targetId: i % 2 ? a : b });
+  advance(g, g.deadline);
   assert.equal(g.sheriffId, null); assert.equal(g.phase, 'discussion'); assert.equal(g.sheriffElectionDone, true);
 });
 
@@ -188,6 +192,7 @@ test('sheriff chooses circular order and is last; 1.5 exile vote breaks a one-to
     speeches(g);
     const a = who(g, 'villager'), b = who(g, 'fool');
     for (const p of g.players) if (g.phase === 'vote') send(g, p.id, { type: 'vote', targetId: p.id === sheriff.id ? a.id : p.id === a.id ? b.id : null });
+    advance(g, g.deadline);
     assert.equal(a.alive, false); assert.equal(b.alive, true); assert.equal(g.runoff, false);
   }
 });
@@ -217,7 +222,7 @@ test('election explosion cancels badge, honors poisoned king and independent fir
   send(g, king.id, { type: 'explode' });
   assert.equal(g.sheriffElectionDone, true); assert.equal(g.sheriffId, null); assert.equal(victim.alive, false); assert.equal(king.alive, false);
   assert.equal(g.pendingHunters.length, 0); assert.deepEqual(g.lastWordsQueue, [victim.id]);
-  send(g, victim.id, { type: 'pass' }); assert.equal(g.round, 2); assert.equal(g.phase, 'guard');
+  send(g, victim.id, { type: 'pass' }); assert.equal(g.round, 2); assert.equal(g.phase, 'night');
 });
 
 test('legacy snapshots without new fields resume existing phases and never start election', () => {
@@ -227,6 +232,6 @@ test('legacy snapshots without new fields resume existing phases and never start
   for (const role of ['wolfKing','whiteWolfKing','fool','knight']) delete g.config.roles[role];
   g = JSON.parse(JSON.stringify(g));
   assert.equal(viewGame(g, g.currentSpeakerId).canSpeak, true); exile(g, null);
-  assert.equal(g.round, 2); assert.equal(g.phase, 'guard'); night(g);
+  assert.equal(g.round, 2); assert.equal(g.phase, 'night'); night(g);
   assert.equal(g.phase, 'discussion');
 });

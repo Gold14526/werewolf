@@ -189,17 +189,17 @@ test('Postgres idle recovery preserves waiting seats and runs once across fresh 
 test('Postgres function replacement preserves a running phase timer and normal requests still advance it', async t => {
   const c = await setup(t);
   const { people, code } = await makeGame(c);
-  const deadline = (await c.snapshot()).rooms.get(code).game.deadline;
+  const deadline = (await c.request('/api/room', { token: people[0].token })).data.room.game.deadline;
   c.now += 10_000;
   const fresh = createPostgresStore(c.pool, { clock: () => c.now });
   const continuing = await c.request('/api/room', { token: people[0].token, customStore: fresh });
   assert.equal(continuing.status, 200, continuing.data.error);
-  assert.equal(continuing.data.room.game.phase, 'wolf');
+  assert.equal(continuing.data.room.game.phase, 'night');
   assert.equal(continuing.data.room.game.deadline, deadline, 'ordinary cold starts must not repeatedly extend a phase');
   c.now = deadline;
   const advanced = await c.request('/api/room', { token: people[0].token, customStore: fresh });
   assert.equal(advanced.status, 200, advanced.data.error);
-  assert.equal(advanced.data.room.game.phase, 'seer');
+  assert.equal(advanced.data.room.game.phase, 'discussion');
   assert.ok(advanced.data.room.game.deadline > c.now);
 });
 

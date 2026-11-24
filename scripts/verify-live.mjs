@@ -45,7 +45,7 @@ assert.equal(restored.player.id,clients[0].player.id);
 assert.equal((await call('/api/room',{token:restored.token})).room.code,[...codes][0]);
 reports.push('reconnected session retains the same seat');
 const extras=await Promise.all([13,14].map(i=>call('/api/session',{method:'POST',body:{name:`验收${stamp}-${i}`}})));
-const created=await call('/api/rooms',{method:'POST',body:{name:'联机功能验收',visibility:'private',config:{roles:{wolf:2,villager:2,seer:1,witch:1,hunter:0,guard:0},victory:'side',nightSeconds:30,daySeconds:60}},token:extras[0].token});
+const created=await call('/api/rooms',{method:'POST',body:{name:'联机功能验收',visibility:'private',config:{roles:{wolf:2,villager:2,seer:1,witch:1,hunter:0,guard:0},victory:'side',nightSeconds:60,otherNightSeconds:30,daySeconds:60}},token:extras[0].token});
 assert.match(created.room.code,/^\d{6}$/);
 const joined=await call('/api/join',{method:'POST',body:{code:created.room.code},token:extras[1].token});
 assert.equal(joined.room.players.length,2);

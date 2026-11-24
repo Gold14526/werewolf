@@ -3,6 +3,8 @@
  * a fresh request loads state under the same database lock before changing it.
  * No player operation is acknowledged until COMMIT succeeds.
  */
+import { recoverClock } from '../server/room-members.mjs';
+
 const KINDS = ['sessions', 'rooms', 'histories', 'standings', 'limits'];
 const MAX_STATE_BYTES = 10 * 1024 * 1024;
 const MAX_ENTITY_BYTES = 1024 * 1024;
@@ -10,7 +12,6 @@ const MAX_ENTITY_ROWS = 6000;
 const HEARTBEAT_MS = 10000;
 const RECOVERY_GAP_MS = 60000;
 const RECONNECT_GRACE_MS = 120000;
-const MIN_RECOVERY_PHASE_MS = 30000;
 const encoder = new TextEncoder();
 
 // Also supplied as neon/schema.sql for database consoles and backup operators.
@@ -112,9 +113,7 @@ function recoverIdleState(state, lastSeen, now) {
   for (const room of state.rooms.values()) {
     room.lastActive += paused;
     room.recoveryUntil = now + RECONNECT_GRACE_MS;
-    if (room.game && room.game.phase !== 'finished') {
-      room.game.deadline = now + Math.max(MIN_RECOVERY_PHASE_MS, room.game.deadline - lastSeen);
-    }
+    recoverClock(room.game, lastSeen, now);
   }
   return true;
 }

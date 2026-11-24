@@ -106,7 +106,7 @@ test('cloud API matches twelve concurrent users into one full room without dupli
   }
 });
 
-test('cloud API rejects concurrent over-capacity joins and preserves one membership per player', async t => {
+test('cloud API automatically seats overflow observers and preserves one playing seat per player', async t => {
   const c = setup(t);
   const people = await users(c, 9);
   const roomA = (await c.request('/api/rooms', { token: people[0].token, body: { config } })).data.room;
@@ -117,8 +117,8 @@ test('cloud API rejects concurrent over-capacity joins and preserves one members
   const assigned = (await c.request('/api/room', { token: people[2].token })).data.room;
   const target = assigned.code;
   const admissions = await Promise.all(people.slice(3).map(user => c.request('/api/join', { token: user.token, body: { code: target } })));
-  assert.equal(admissions.filter(result => result.status === 200).length, 4);
-  assert.equal(admissions.filter(result => result.status === 400).length, 2);
+  assert.ok(admissions.every(result => result.status === 200));
+  assert.equal(admissions.filter(result => result.data.room.isSpectator).length, 2);
   const current = (await c.request('/api/room', { token: people[2].token })).data.room;
   assert.equal(current.players.length, 6);
   assert.equal(new Set(current.players.map(p => p.seat)).size, 6);
@@ -133,7 +133,7 @@ test('cloud API delivers wolf messages privately and rejects unauthorized night 
   const views = await Promise.all(people.map(async user => ({ user, room: (await c.request('/api/room', { token: user.token })).data.room })));
   const wolf = views.find(view => view.room.game.myRole === 'wolf').user;
   const good = views.find(view => view.room.game.myRole !== 'wolf').user;
-  assert.equal(views[0].room.game.phase, 'wolf');
+  assert.equal(views[0].room.game.phase, 'night');
   assert.equal((await c.request('/api/chat', { token: good.token, body: { text: '窃听狼聊', channel: 'wolf' } })).status, 400);
   assert.equal((await c.request('/api/action', { token: good.token, body: { type: 'wolf', targetId: wolf.player.id } })).status, 400);
   assert.equal((await c.request('/api/chat', { token: wolf.token, body: { text: '仅狼队可见的秘密', channel: 'wolf' } })).status, 200);
@@ -142,7 +142,10 @@ test('cloud API delivers wolf messages privately and rejects unauthorized night 
   assert.equal(JSON.stringify(goodView).includes('仅狼队可见的秘密'), false);
   assert.equal(JSON.stringify(wolfView).includes('仅狼队可见的秘密'), true);
   const outsider = await c.session('房外玩家');
-  assert.equal((await c.request('/api/join', { token: outsider.token, body: { code } })).status, 400);
+  const observing = await c.request('/api/join', { token: outsider.token, body: { code } });
+  assert.equal(observing.status, 200);
+  assert.equal(observing.data.room.isSpectator, true);
+  assert.ok(observing.data.room.game.players.every(player => !player.role));
 });
 
 test('cloud API records finished history once and keeps private replay restricted', async t => {
@@ -177,11 +180,13 @@ test('cloud API only accepts same-origin or configured CORS requests', async t =
 });
 
 test('cloud API advances persisted deadlines and lets outsiders read finished public games', async t => {
-  const c = setup(t);
+  let now = Date.now();
+  const c = setup(t, { CLOCK: () => now });
   const { people, code } = await makeGame(c, 'public');
-  c.editRoom(code, room => { room.game.deadline = Date.now() - 1000; });
+  const before = (await c.request('/api/room', { token: people[0].token })).data.room;
+  now = before.game.deadline;
   const advanced = (await c.request('/api/room', { token: people[0].token })).data.room;
-  assert.equal(advanced.game.phase, 'seer');
+  assert.equal(advanced.game.phase, 'discussion');
   assert.ok(advanced.game.deadline > Date.now());
   c.editRoom(code, room => { room.game.phase = 'finished'; room.game.winner = 'wolf'; room.game.deadline = null; });
   await c.request('/api/room', { token: people[0].token });

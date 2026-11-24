@@ -59,12 +59,16 @@ test('room creation submits selected new roles and the sheriff checkbox and rese
   assert.match(ui.elements.get('#modal-root').innerHTML, /type="checkbox" id="sheriff-enabled"/);
   assert.match(ui.elements.get('#modal-root').innerHTML, /<option value="75" selected>75 秒<\/option>/);
   for (const [role, delta] of [['wolf', -1], ['wolfKing', 1], ['villager', -1], ['fool', 1]]) await ui.click({ count: role, delta: String(delta) });
-  ui.field('#sheriff-enabled', { checked: true });
+  ui.field('#other-night-seconds', { value: '40' }); ui.field('#witch-self-save', { value: 'none' });
+  ui.field('#shuffle-seats', { checked: true }); ui.field('#sheriff-enabled', { checked: true });
   ui.field('#victory', { value: 'side' }); ui.field('#night-seconds', { value: '75' }); ui.field('#day-seconds', { value: '90' });
   ui.field('#room-name', { value: '角色测试' }); ui.field('#visibility', { value: 'private' });
   await ui.submit('create-form');
   const posted = ui.calls.find(c => c.path === '/api/rooms' && c.body)?.body;
   assert.equal(posted.config.sheriff, true);
+  assert.equal(posted.config.shuffleSeats, true);
+  assert.equal(posted.config.witchSelfSave, 'none');
+  assert.equal(posted.config.otherNightSeconds, 40);
   assert.equal(posted.config.victory, 'side');
   assert.equal(posted.config.nightSeconds, 75);
   assert.equal(posted.config.roles.wolfKing, 1);
@@ -72,23 +76,26 @@ test('room creation submits selected new roles and the sheriff checkbox and rese
   assert.equal(Object.values(posted.config.roles).reduce((a, b) => a + b, 0), 12);
   await ui.click({ do: 'reset-config' });
   assert.equal(ui.elements.get('#sheriff-enabled').checked, false);
+  assert.equal(ui.elements.get('#shuffle-seats').checked, false);
+  assert.equal(ui.elements.get('#witch-self-save').value, 'first');
+  assert.equal(Number(ui.elements.get('#other-night-seconds').value), 30);
   assert.equal(ui.app.state.config.roles.wolfKing, 0);
   assert.equal(Number(ui.elements.get('#night-seconds').value), 75);
   ui.app.state.room={code:'123456',config:{...engine.STANDARD_CONFIG,victory:'all',nightSeconds:90},players:[],messages:[],game:null};
-  assert.match(ui.app.roomView(), /屠城 · 夜间 90 秒/);
+  assert.match(ui.app.roomView(), /屠城 · 狼队 90 秒 · 其它行动 30 秒/);
 });
 
 test('sheriff signup, direction and transfer controls send engine-compatible payloads', async () => {
   const ui = await frontend();
-  putInRoom(ui.app, gameView({ phase: 'sheriff_signup', actionable: true, canDuel: false }));
+  putInRoom(ui.app, gameView({ phase: 'sheriff_signup', actionable: true, canDuel: false, action: { type: 'sheriff_signup', targets: [] } }));
   ui.app.state.target = 'stale-target';
   await ui.click({ action: 'join' });
   assert.deepEqual(ui.calls.at(-1).body, { type: 'sheriff_signup', targetId: null, choice: 'join' });
-  putInRoom(ui.app, gameView({ phase: 'sheriff_direction', actionable: true, canDuel: false }));
+  putInRoom(ui.app, gameView({ phase: 'sheriff_direction', actionable: true, canDuel: false, action: { type: 'sheriff_direction', targets: [] } }));
   assert.match(ui.app.actionPanel(ui.app.state.room.game), /从左侧开始/);
   await ui.click({ action: 'left' });
   assert.deepEqual(ui.calls.at(-1).body, { type: 'sheriff_direction', targetId: null, choice: 'left' });
-  putInRoom(ui.app, gameView({ phase: 'sheriff_transfer', actionable: true, canDuel: false, action: { targets: [] } }));
+  putInRoom(ui.app, gameView({ phase: 'sheriff_transfer', actionable: true, canDuel: false, action: { type: 'sheriff_transfer', targets: [] } }));
   assert.match(ui.app.actionPanel(ui.app.state.room.game), /撕毁警徽/);
   await ui.click({ action: 'skip' });
   assert.deepEqual(ui.calls.at(-1).body, { type: 'sheriff_transfer', targetId: null });
@@ -144,7 +151,8 @@ test('special wolves see the wolf channel, sheriff badges and revealed fool stat
     assert.match(html, /badge sheriff/);
     assert.match(html, /已翻牌 · 无投票权/);
     assert.doesNotMatch(html, /<script>/);
-    ui.app.state.room.game.phase = 'wolf';
+    ui.app.state.room.game.phase = 'night';
+    ui.app.state.room.game.canWolfChat = true;
     ui.app.state.problemTab = 'submit';
     ui.app.state.submitTab = 'file';
     const nightHtml = ui.app.roomView();

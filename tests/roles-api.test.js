@@ -56,10 +56,10 @@ async function setup(t, backend) {
   };
 }
 
-async function makeGame(c) {
+async function makeGame(c, overrides = {}) {
   const people = [];
   for (let i = 0; i < 9; i++) people.push(await c.session(`新角色${i + 1}`));
-  const created = await c.request('/api/rooms', { token: people[0].token, body: { config, visibility: 'public', name: '特殊角色上警局' } });
+  const created = await c.request('/api/rooms', { token: people[0].token, body: { config: { ...config, ...overrides }, visibility: 'public', name: '特殊角色上警局' } });
   assert.equal(created.status, 200, JSON.stringify(created.data));
   assert.match(created.data.room.code, /^\d{6}$/);
   assert.equal(created.data.room.config.sheriff, true);
@@ -89,7 +89,7 @@ for (const backend of ['node', 'cloud']) {
     const good = people.filter(person => !wolfRoles.has(person.role));
     assert.equal(wolves.length, 3);
     assert.deepEqual(new Set(wolves.map(person => person.role)), wolfRoles);
-    assert.equal(people[0].room.game.phase, 'wolf');
+    assert.equal(people[0].room.game.phase, 'night');
     const target = good.find(person => person.role === 'villager');
     const knight = good.find(person => person.role === 'knight');
     const whiteKing = wolves.find(person => person.role === 'whiteWolfKing');
@@ -155,5 +155,182 @@ for (const backend of ['node', 'cloud']) {
     for (const role of ['wolfKing', 'whiteWolfKing', 'fool', 'knight']) assert.equal(replay.game.players.filter(player => player.role === role).length, 1);
     const repeated = (await c.request('/api/stats', { token: people[0].token })).data.standings;
     assert.ok(repeated.every(entry => entry.games === 1), 'repeated reads cannot duplicate wins');
+  });
+}
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} room roster, playing seats and subsequent reloads agree when seating is shuffled`, async t => {
+    const c = await setup(t, backend);
+    const { people, code } = await makeGame(c, { shuffleSeats: true });
+    const seats = people[0].room.players.map(p => [p.id, p.seat]);
+    assert.equal(new Set(seats.map(([, seat]) => seat)).size, people.length);
+    for (const person of people) {
+      const visible = person.room.game.players.map(p => [p.id, p.seat]);
+      assert.deepEqual(new Map(visible), new Map(seats));
+    }
+    await c.reloadHandler();
+    c.setNow(people[0].room.game.deadline);
+    const room = (await c.request('/api/room?code=' + code, { token: people[0].token })).data.room;
+    assert.equal(room.game.phase, 'sheriff_signup');
+    assert.deepEqual(room.players.map(p => [p.id, p.seat]), seats);
+    assert.deepEqual(new Map(room.game.players.map(p => [p.id, p.seat])), new Map(seats));
+  });
+
+  test(`${backend} serializes competing seats across and within rooms`, async t => {
+    const c = await setup(t, backend);
+    const hostA = await c.session('甲房房主'), hostB = await c.session('乙房房主');
+    const guest = await c.session('跨房玩家'), rival = await c.session('竞争座位');
+    const post = (path, user, body) => c.request(path, { token: user.token, body });
+    const create = async host => (await post('/api/rooms', host, { config })).data.room.code;
+    const [a, b] = [await create(hostA), await create(hostB)];
+    const seat = (user, code, n) => post('/api/seat?code=' + code, user, { seat: n });
+    const join = (user, code) => post('/api/join', user, { code });
+    const read = async (user, code) => (await c.request('/api/room?code=' + code, { token: user.token })).data.room;
+    for (const code of [a, b]) {
+      assert.equal((await join(guest, code)).status, 200);
+      assert.equal((await seat(guest, code, null)).data.room.isSpectator, true);
+    }
+    const race = await Promise.all([seat(guest, a, 4), seat(guest, b, 4)]);
+    assert.equal(race.filter(r => r.status === 200).length, 1);
+    const [won, lost] = race[0].status === 200 ? [a, b] : [b, a];
+    assert.equal((await read(guest, won)).players.find(p => p.id === guest.player.id).seat, 4);
+    assert.equal((await read(guest, lost)).players.some(p => p.id === guest.player.id), false);
+    assert.ok((await seat(guest, won, 1)).status >= 400);
+    assert.equal((await seat(guest, won, 3)).data.room.players.find(p => p.id === guest.player.id).seat, 3);
+    assert.equal((await join(rival, won)).status, 200);
+    const sameSeat = await Promise.all([seat(rival, won, 4), seat(guest, won, 4)]);
+    assert.equal(sameSeat.filter(r => r.status === 200).length, 1);
+    const final = await read(guest, won);
+    assert.equal(final.players.length, 3);
+    assert.equal(new Set(final.players.map(p => p.seat)).size, 3);
+  });
+
+  test(`${backend} observers and eliminated participants may enter another game while original seats remain fixed`, async t => {
+    const c = await setup(t, backend);
+    const { people, code } = await makeGame(c);
+    const outsider = await c.session('临时观众');
+    const nextHost = await c.session('下一局房主');
+    const next = (await c.request('/api/rooms', { token: nextHost.token, body: { config } })).data.room.code;
+    const guest = people.find(p => p.role === 'villager');
+    const living = people.find(p => p.role === 'knight');
+    c.editRoom(code, room => { room.game.players.find(p => p.id === guest.player.id).alive = false; });
+    const past = (await c.request('/api/room?code=' + code, { token: guest.token })).data.room;
+    assert.equal(past.isSpectator, true);
+    const firstSeat = past.players.find(p => p.id === guest.player.id).seat;
+    assert.equal((await c.request('/api/join', { token: outsider.token, body: { code } })).data.room.isSpectator, true);
+    for (const spectator of [guest, outsider]) {
+      const joined = await c.request('/api/join', { token: spectator.token, body: { code: next } });
+      assert.equal(joined.status, 200);
+      assert.ok(joined.data.room.players.some(p => p.id === spectator.player.id));
+      const old = (await c.request('/api/room?code=' + code, { token: spectator.token })).data.room;
+      assert.equal(old.isSpectator, true);
+      assert.equal(old.players.find(p => p.id === guest.player.id).seat, firstSeat);
+    }
+    for (const [route, body] of [['/api/join', { code: next }], ['/api/match', {}], ['/api/rooms', { config }]]) {
+      const res = await c.request(route, { token: living.token, body });
+      assert.ok([200, 400, 403].includes(res.status));
+      if (res.status === 200) assert.equal(res.data.room.code, code, 'a repeated request can only preserve the current playing seat');
+    }
+    assert.ok((await c.request('/api/seat?code=' + code, { token: living.token, body: { seat: 1 } })).status >= 400);
+    assert.equal((await c.request('/api/room', { token: nextHost.token })).data.room.players.length, 3);
+  });
+}
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} keeps spectators read-only and preserves a dead player's outstanding last words across rooms`, async t => {
+    const c = await setup(t, backend);
+    const { people, code } = await makeGame(c);
+    const observer = await c.session('旁观测试'), wolf = people.find(p => wolfRoles.has(p.role));
+    const read = (user, roomCode) => c.request('/api/room?code=' + roomCode, { token: user.token });
+    const post = (user, path, body = {}) => c.request('/api/' + path, { token: user.token, body });
+    await post(wolf, 'chat', { text: '仅同伴可见', channel: 'wolf' });
+    const watching = (await post(observer, 'join', { code })).data.room;
+    assert.equal(watching.isSpectator, true);
+    assert.equal(watching.players.length, people.length);
+    assert.equal(watching.messages.filter(m => m.text === '旁观测试 加入了观战席').length, 1);
+    assert.equal(watching.messages.some(m => m.text === '仅同伴可见'), false);
+    assert.equal(watching.game.myRole, null);
+    assert.deepEqual(watching.game.privateInfo, {});
+    assert.equal(watching.game.players.some(p => p.role), false);
+    assert.equal((await post(observer, 'chat', { text: '观众发言' })).status, 403);
+    assert.equal((await post(observer, 'action', { type: 'wolf', targetId: null })).status, 403);
+    assert.equal((await post(observer, 'action', { type: 'return' })).status, 403);
+    assert.equal((await post(observer, 'leave')).status, 200);
+    assert.equal((await read(observer, code)).status, 403);
+    assert.equal((await read(wolf, code)).data.room.messages.at(-1).text, '旁观测试 离开了观战席');
+
+    const originalSeat = watching.players.find(p => p.id === wolf.player.id).seat;
+    c.editRoom(code, ({ game }) => {
+      game.players.find(p => p.id === wolf.player.id).alive = false;
+      game.phase = 'lastwords'; game.currentSpeakerId = wolf.player.id;
+      game.lastWordsQueue = [wolf.player.id]; game.deadline = 1_800_000_120_000;
+      game.inactivityDeadline = 1_800_000_060_000;
+    });
+    const afterDeath = (await read(wolf, code)).data.room;
+    assert.equal(afterDeath.isSpectator, true);
+    assert.equal(afterDeath.game.action.type, 'pass');
+    assert.equal(afterDeath.game.canSpeak, true);
+    assert.equal(afterDeath.game.players.find(p => p.id === wolf.player.id).alive, false);
+    assert.deepEqual(afterDeath.game.privateInfo, {});
+    assert.equal(afterDeath.messages.some(m => m.channel === 'wolf'), false);
+    const second = (await post(wolf, 'rooms', { config })).data;
+    assert.notEqual(second.room.code, code);
+    assert.deepEqual(new Set(second.memberships.map(m => m.code)), new Set([code, second.room.code]));
+    const spoken = await post(wolf, 'chat?code=' + code, { text: '我的遗言' });
+    assert.equal(spoken.status, 200, spoken.data.error);
+    assert.equal(spoken.data.room.messages.at(-1).seat, originalSeat);
+    assert.equal((await post(wolf, 'action?code=' + code, { type: 'pass' })).status, 200);
+    assert.equal((await post(wolf, 'action?code=' + code, { type: 'vote', targetId: null })).status, 403);
+    await c.reloadHandler();
+    assert.equal((await read(wolf, second.room.code)).data.room.isSpectator, false);
+    assert.equal((await read(wolf, code)).data.room.isSpectator, true);
+  });
+
+  test(`${backend} upgrades an in-progress legacy room and persists real speaking activity independently of voting`, async t => {
+    const c = await setup(t, backend);
+    const { people, code } = await makeGame(c);
+    const speaker = people[0], start = 1_800_000_000_000;
+    c.editRoom(code, room => {
+      for (const config of [room.config, room.game.config]) {
+        config.nightSeconds = 75;
+        delete config.otherNightSeconds;
+        delete config.witchSelfSave;
+        delete config.shuffleSeats;
+      }
+      room.game.phase = 'wolf';
+      room.game.deadline = start + 75_000;
+      delete room.game.night.windows;
+    });
+    const fetchRoom = () => c.request('/api/room', { token: speaker.token });
+    const upgraded = (await fetchRoom()).data.room;
+    assert.equal(upgraded.game.phase, 'night');
+    for (const config of [upgraded.config, upgraded.game.config]) {
+      assert.equal(config.nightSeconds, 75);
+      assert.equal(config.otherNightSeconds, 30);
+      assert.equal(config.witchSelfSave, 'first');
+      assert.equal(config.shuffleSeats, false);
+    }
+    c.editRoom(code, ({ game }) => {
+      game.phase = 'discussion';
+      game.speechQueue = people.map(p => p.player.id);
+      game.currentSpeakerId = speaker.player.id; game.deadline = start + 120_000;
+      game.inactivityDeadline = start + 60_000;
+    });
+    c.setNow(start + 48_000);
+    const typed = await c.request('/api/action', { token: speaker.token, body: { type: 'typing' } });
+    assert.equal(typed.status, 200, typed.data.error);
+    assert.equal(typed.data.room.game.inactivityDeadline, start + 108_000);
+    c.setNow(start + 65_000);
+    await c.reloadHandler();
+    const current = (await fetchRoom()).data.room.game;
+    assert.equal(current.currentSpeakerId, speaker.player.id);
+    assert.equal(current.myAfk, false);
+    c.setNow(start + 109_000);
+    const inactive = (await fetchRoom()).data.room.game;
+    assert.equal(inactive.myAfk, true);
+    assert.notEqual(inactive.currentSpeakerId, speaker.player.id);
+    const back = await c.request('/api/action', { token: speaker.token, body: { type: 'return' } });
+    assert.equal(back.status, 200, back.data.error);
+    assert.equal(back.data.room.game.myAfk, false);
   });
 }

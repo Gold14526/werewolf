@@ -3,16 +3,16 @@ import assert from 'node:assert/strict';
 import { createGame, act, advance, viewGame, isWolfRole } from '../web/engine.js';
 
 const CONFIG = { roles: { wolf: 1, wolfKing: 1, whiteWolfKing: 1, villager: 3, seer: 1, witch: 1, hunter: 1, guard: 1, fool: 1, knight: 1 }, victory: 'side', nightSeconds: 30, daySeconds: 60, sheriff: true };
-const nightPhases = new Set(['guard', 'wolf', 'seer', 'witch']);
 function game(config = CONFIG, random = () => .999) {
   return createGame(Array.from({ length: Object.values(config.roles).reduce((a, b) => a + b, 0) }, (_, i) => ({ id: `review${i}`, name: `独立验收${i}`, seat: i + 1 })), config, { now: 1000, random });
 }
 const role = (g, r) => g.players.find(p => p.role === r);
 const submit = (g, id, action) => act(g, id, action, g.deadline - 1);
 function night(g, victim = null, poison = null) {
-  while (nightPhases.has(g.phase)) {
-    const phase = g.phase;
-    for (const p of g.players) if (viewGame(g, p.id).actionable) {
+  while (g.phase === 'night') {
+    for (const p of g.players) {
+      const phase = viewGame(g, p.id).action?.type;
+      if (!phase) continue;
       submit(g, p.id, { type: phase, targetId: phase === 'wolf' ? victim : phase === 'witch' ? poison : null, ...(phase === 'witch' ? { choice: poison ? 'poison' : 'skip' } : {}) });
     }
     advance(g, g.deadline);
@@ -39,7 +39,7 @@ test('white king election carry suppresses a pending night victim gun without sw
   assert.deepEqual(g.lastWordsQueue, [seer.id]);
   finishWords(g);
   assert.equal(g.round, 2);
-  assert.ok(nightPhases.has(g.phase));
+  assert.ok(g.phase === 'night');
 });
 
 test('newly elected night-dead hunter sheriff resolves a wolf king gun chain before transferring once', () => {
@@ -122,8 +122,8 @@ test('role-rich randomized legal view actions always progress without hidden sta
         if (v.action.type === 'pass') submit(g, p.id, { type: 'pass' });
         else if (v.phase === 'sheriff_signup') submit(g, p.id, { type: v.phase, choice: random() < .45 ? 'join' : 'skip' });
         else if (v.phase === 'sheriff_direction') submit(g, p.id, { type: v.phase, choice: random() < .5 ? 'left' : 'right' });
-        else if (v.phase === 'witch') submit(g, p.id, { type: 'witch', choice: 'skip' });
-        else submit(g, p.id, { type: v.phase, targetId: v.action.targets.length && random() < .9 ? v.action.targets[Math.floor(random() * v.action.targets.length)].id : null });
+        else if (v.action.type === 'witch') submit(g, p.id, { type: 'witch', choice: 'skip' });
+        else submit(g, p.id, { type: v.action.type, targetId: v.action.targets.length && random() < .9 ? v.action.targets[Math.floor(random() * v.action.targets.length)].id : null });
       } else advance(g, g.deadline);
       assert.equal(new Set(g.hunterUsed).size, g.hunterUsed.length);
       assert.ok(!g.sheriffId || g.players.find(p => p.id === g.sheriffId)?.alive);

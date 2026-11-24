@@ -10,9 +10,8 @@ import * as problem from '../web/problem-content.js';
 const source = (await readFile(new URL('../web/app.js', import.meta.url), 'utf8'))
   .replace(/^import .*?;\n/gm, '') + '\n;globalThis.frontend = {state,connect,refreshData,mutation,invitationUrl,joinRoom,waitForConnect:()=>connectPromise};';
 
-async function loadFrontend(fetch, {token='',url='https://moonwolf.test/',configuredApi='',storedApi,abortSignal=AbortSignal}={}) {
+async function loadFrontend(fetch, {token='',url='https://moonwolf.test/',configuredApi='',storedApi,abortSignal=AbortSignal,local=new Map([['moonwolf:name','固定昵称']]),locks}={}) {
   const saved = new Map(token ? [['moonwolf:token:',token]] : []);
-  const local = new Map([['moonwolf:name','固定昵称']]);
   if(storedApi!==undefined)local.set('moonwolf:apiBase',storedApi);
   const element = () => ({innerHTML:'',textContent:'',classList:{add(){},remove(){},toggle(){}},focus(){}});
   const elements = new Map(['#app','#modal-root','#toast'].map(key=>[key,element()]));
@@ -24,7 +23,7 @@ async function loadFrontend(fetch, {token='',url='https://moonwolf.test/',config
     localStorage:{getItem:key=>local.get(key)??null,setItem:(key,value)=>local.set(key,value)},
     sessionStorage:{getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value)},
     document:{activeElement:null,visibilityState:'visible',querySelector:key=>elements.get(key)||null,querySelectorAll:()=>[],getElementById:()=>null,addEventListener:(name,cb)=>callbacks.set(name,cb)},
-    window:{MOONWOLF_CONFIG:{apiBase:configuredApi},addEventListener(){}}, navigator:{}, fetch,
+    window:{MOONWOLF_CONFIG:{apiBase:configuredApi},addEventListener(){}}, navigator:{locks}, fetch,
     setTimeout:(callback,delay)=>{timers.push({callback,delay});return timers.length;},clearTimeout:id=>clearedTimers.push(id),setInterval(){},
   });
   vm.runInContext(source,context,{filename:'app.js'});
@@ -33,6 +32,38 @@ async function loadFrontend(fetch, {token='',url='https://moonwolf.test/',config
 }
 const reply = (body,status=200) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
 const baseResponse = path => path==='/api/health'?{ok:true,service:'moonwolf'}:path==='/api/room'?{room:null}:path==='/api/rooms'?{rooms:[]}:path==='/api/history'?{history:[]}:{standings:[]};
+
+test('simultaneously opened tabs and a reopened browser share one game identity', async () => {
+  const local = new Map(), calls = [];
+  let previous = Promise.resolve();
+  const locks = {request(key, callback) { previous = previous.then(callback); return previous; }};
+  async function fetch(path, options) {
+    if (path !== '/api/session') return reply(baseResponse(path));
+    calls.push(options.headers.Authorization);
+    return reply({token:'browser-token',player:{id:'one-player',name:'同一个玩家'}});
+  }
+  const tabs = await Promise.all([loadFrontend(fetch, {local,locks}), loadFrontend(fetch, {local,locks})]);
+  tabs.push(await loadFrontend(fetch, {local,locks}));
+  assert.deepEqual(calls, [undefined, 'Bearer browser-token', 'Bearer browser-token']);
+  assert.ok(tabs.every(tab => tab.app.state.player.id === 'one-player'));
+});
+
+test('old tabs converge on the same identity, preferring a seated player over an empty lobby', async () => {
+  const room={code:'123456',name:'已有房间',config:engine.STANDARD_CONFIG,players:[{id:'old-seat',name:'原玩家',seat:1,ready:true}],game:null,messages:[],hostId:'old-seat',visibility:'private'};
+  const fetch=async (path,options)=>{
+    const id=options.headers.Authorization?.replace('Bearer ','');
+    if(path==='/api/session')return reply({token:id,player:{id,name:'原玩家'}});
+    if(path==='/api/room')return reply({room:id==='old-seat'?room:null});
+    return reply(baseResponse(path));
+  };
+  const local=new Map([['moonwolf:token:','idle-shared']]);
+  const first=await loadFrontend(fetch,{local,token:'old-seat'});
+  assert.equal(first.app.state.player.id,'old-seat');
+  assert.equal(local.get('moonwolf:token:'),'old-seat');
+  const second=await loadFrontend(fetch,{local,token:'other-idle'});
+  assert.equal(second.app.state.player.id,'old-seat');
+  assert.equal(second.saved.get('moonwolf:token:'),'old-seat');
+});
 
 test('frontend restores the existing player without accidentally renaming during a game',async()=>{
   const calls=[];
@@ -71,11 +102,11 @@ test('an old polling response cannot overwrite a successful room mutation',async
   const updated=structuredClone(room);updated.players[0].ready=true;
   const {app}=await loadFrontend(async(path)=>{
     if(path==='/api/session')return reply({token:'token',player:{id:'p1',name:'玩家'}});
-    if(path==='/api/room'){
+    if(path==='/api/room'||path==='/api/room?code=123456'){
       if(holdNext){holdNext=false;return new Promise(resolve=>{release=()=>resolve(reply({room}));});}
       return reply({room});
     }
-    if(path==='/api/ready')return reply({room:updated});
+    if(path==='/api/ready?code=123456')return reply({room:updated});
     return reply(baseResponse(path));
   });
   holdNext=true;

@@ -105,18 +105,15 @@ test('SQLite restart restores an advanced game, hidden roles, sessions, messages
   const seer = userFor(game.players.find(player => player.role === 'seer'));
   const witch = userFor(game.players.find(player => player.role === 'witch'));
   const villager = userFor(game.players.find(player => player.role === 'villager'));
-  assert.equal(game.phase, 'wolf');
+  assert.equal(game.phase, 'night');
   assert.equal((await original.request('/api/chat', { token: wolves[0].token, body: { channel: 'wolf', text: '仅狼队可见的持久消息' } })).status, 200);
   for (const wolf of wolves) {
     assert.equal((await original.request('/api/action', { token: wolf.token, body: { type: 'wolf', targetId: villager.player.id } })).status, 200);
   }
-  now = game.deadline;
-  original.app.tick();
-  assert.equal(game.phase, 'seer');
   assert.equal((await original.request('/api/action', { token: seer.token, body: { type: 'seer', targetId: wolves[0].player.id } })).status, 200);
   now = game.deadline;
   original.app.tick();
-  assert.equal(game.phase, 'witch');
+  assert.equal((await original.request('/api/room', { token: witch.token })).data.room.game.action.type, 'witch');
   assert.equal((await original.request('/api/action', { token: witch.token, body: { type: 'witch', choice: 'save', targetId: villager.player.id } })).status, 200);
   now = game.deadline;
   original.app.tick();
@@ -249,7 +246,7 @@ test('acknowledged game actions survive SIGKILL without a graceful-shutdown flus
   const recovered = await restarted.request('/api/room', { token: wolf.token });
   assert.equal(recovered.status, 200, recovered.data.error);
   assert.equal(recovered.data.room.code, code);
-  assert.equal(recovered.data.room.game.phase, 'wolf');
+  assert.equal(recovered.data.room.game.phase, 'night');
   assert.equal(recovered.data.room.game.submitted, true);
   assert.ok(recovered.data.room.game.privateInfo.wolfVotes.some(vote => vote.playerId === wolf.player.id && vote.targetId === good.player.id));
   assert.ok(recovered.data.room.messages.some(message => message.text === 'SIGKILL 前服务端确认的私聊'));
@@ -356,4 +353,49 @@ test('an unreadable saved snapshot fails startup without replacing it with an em
   } finally {
     db.close();
   }
+});
+
+test('SQLite restart upgrades active room timing while preserving gallery membership and an independent seat', async t => {
+  const databasePath = await databaseFile(t);
+  let now = 1_800_000_000_000;
+  const first = await startApp(t, databasePath, { now: () => now });
+  const { code } = await makeGame(first);
+  const watcher = await first.session('重启观战');
+  const entered = await first.request('/api/join', { token: watcher.token, body: { code } });
+  assert.equal(entered.data.room.isSpectator, true);
+  const second = await first.request('/api/rooms', { token: watcher.token, body: { config } });
+  assert.equal(second.data.memberships.length, 2);
+  await first.stop();
+
+  // A legacy sequential wolf turn with a confirmed ballot must survive deployment.
+  const db = new DatabaseSync(databasePath);
+  const row = db.prepare('SELECT payload FROM app_state WHERE id = 1').get();
+  const saved = JSON.parse(row.payload);
+  const room = saved.rooms.find(([number]) => number === code)[1];
+  for (const cfg of [room.config, room.game.config]) {
+    delete cfg.otherNightSeconds; delete cfg.witchSelfSave; delete cfg.shuffleSeats;
+    cfg.nightSeconds = 75;
+  }
+  const wolf = room.game.players.find(p => p.role === 'wolf');
+  const victim = room.game.players.find(p => p.role === 'villager');
+  room.game.phase = 'wolf'; room.game.deadline = now + 70_000;
+  delete room.game.night.windows;
+  room.game.actions[wolf.id] = { targetId: victim.id };
+  db.prepare('UPDATE app_state SET payload = ? WHERE id = 1').run(JSON.stringify(saved));
+  db.close();
+
+  now += 2 * HOUR;
+  const next = await startApp(t, databasePath, { now: () => now });
+  const gallery = (await next.request('/api/room?code=' + code, { token: watcher.token })).data;
+  assert.equal(gallery.room.isSpectator, true);
+  assert.equal(gallery.memberships.length, 2);
+  assert.equal(gallery.room.messages.filter(m => m.text === '重启观战 加入了观战席').length, 1);
+  assert.equal(gallery.room.game.myRole, null);
+  assert.equal(gallery.room.config.nightSeconds, 75);
+  assert.equal(gallery.room.game.config.otherNightSeconds, 30);
+  assert.equal(gallery.room.game.phase, 'night');
+  assert.deepEqual(next.app.state.rooms.get(code).game.actions[wolf.id], { targetId: victim.id });
+  const own = (await next.request('/api/room', { token: watcher.token })).data.room;
+  assert.equal(own.code, second.data.room.code);
+  assert.equal(own.isSpectator, false);
 });

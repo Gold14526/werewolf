@@ -1,4 +1,5 @@
-import { STANDARD_CONFIG, validateConfig, createGame, act, advance, viewGame, canChat, isWolfRole } from '../web/engine.js';
+import { STANDARD_CONFIG, validateConfig, createGame, act, canChat, isWolfRole } from '../web/engine.js';
+import { activeRoom, allowAction, capacity, deathTurn, dropMember, enterRoom, gameView, isWatcher, memberships, messagesFor, placeSeat, requireSeat, selectRoom, synchronizeSeats, updateRoom } from '../server/room-members.mjs';
 import { withState } from './store.js';
 
 const MINUTE = 60000, HOUR = 60 * MINUTE;
@@ -8,7 +9,6 @@ const encoder = new TextEncoder();
 const bytes = value => encoder.encode(JSON.stringify(value)).length;
 const random = () => crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000;
 const id = () => crypto.randomUUID();
-const capacity = room => Object.values(room.config.roles).reduce((a, b) => a + b, 0);
 function token() {
   const data = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...data)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -35,15 +35,6 @@ function sessionFor(state, hash, now) {
   return session;
 }
 function sessionById(state, playerId) { return [...state.sessions.values()].find(s => s.id === playerId); }
-function currentRoom(state, session, required = true) {
-  const room = session.roomCode && state.rooms.get(session.roomCode);
-  if (!room || !room.players.some(p => p.id === session.id)) {
-    session.roomCode = null;
-    if (required) throw fail('请先进入房间', 404);
-    return null;
-  }
-  return room;
-}
 function pushMessage(room, name, text, now, playerId = null, channel = 'public') {
   const seat = room.players.find(p => p.id === playerId)?.seat;
   room.messages.push({ id: id(), playerId, seat, name, text, channel, at: now, system: playerId === null });
@@ -53,40 +44,22 @@ function pushMessage(room, name, text, now, playerId = null, channel = 'public')
 function trimRoom(room) {
   while (room.messages.length > 1 && bytes(room) > 220 * 1024) room.messages.shift();
 }
-function dropMember(state, room, session, now) {
-  room.players = room.players.filter(p => p.id !== session.id);
-  if (session.roomCode === room.code) session.roomCode = null;
-  if (!room.players.length) state.rooms.delete(room.code);
-  else {
-    pushMessage(room, '系统', `${session.name} 离开了房间`, now);
-    if (room.hostId === session.id) {
-      room.hostId = room.players[0].id;
-      room.players[0].ready = true;
-      pushMessage(room, '系统', `${room.players[0].name} 成为新房主`, now);
-    }
-  }
-}
-function gameView(game, viewerId) {
-  const member = game.players.some(p => p.id === viewerId);
-  if (!member && game.phase !== 'finished') throw fail('你不在这个房间中', 403);
-  const view = viewGame(game, member ? viewerId : game.players[0].id);
-  if (!member) { view.myRole = null; view.privateInfo = {}; }
-  return view;
-}
+function announce(room, now) { return text => pushMessage(room, '系统', text, now); }
 function serialize(state, room, session, now) {
   if (!room) return null;
   return {
     code: room.code, name: room.name, hostId: room.hostId, visibility: room.visibility,
-    matchmaking: room.matchmaking, config: room.config, createdAt: room.createdAt,
-    players: room.players.map(p => ({ ...p, connected: now - (sessionById(state, p.id)?.lastSeen ?? 0) < 45000 })),
-    messages: room.messages.filter(m => m.channel !== 'wolf' || room.game?.phase === 'finished' || isWolfRole(room.game?.players.find(p => p.id === session.id)?.role)),
-    game: room.game ? gameView(room.game, session.id) : null,
+    isSpectator: isWatcher(room, session.id), matchmaking: room.matchmaking, config: room.config, createdAt: room.createdAt,
+    players: room.players.map(p => ({ id: p.id, seat: p.seat, name: p.name, ready: p.ready, connected: now - (sessionById(state, p.id)?.lastSeen ?? 0) < 45000 })),
+    messages: messagesFor(room, session.id, isWatcher(room, session.id)),
+    game: room.game ? gameView(room.game, session.id, isWatcher(room, session.id)) : null,
   };
 }
 function recordFinished(state, room, now) {
   if (!room.game || room.game.phase !== 'finished' || room.recorded) return;
   room.recorded = true;
-  state.histories.set(room.code, structuredClone({ ...room, endedAt: now }));
+  const { spectators, ...history } = room;
+  state.histories.set(room.code, structuredClone({ ...history, endedAt: now }));
   const ordered = [...state.histories.values()].sort((a, b) => a.endedAt - b.endedAt);
   while (ordered.length > MAX_HISTORY) state.histories.delete(ordered.shift().code);
   for (const p of room.game.players) {
@@ -114,27 +87,17 @@ function start(room, now) {
   if (room.players.length !== capacity(room)) throw fail('人数未满，暂时不能开始');
   if (!room.players.every(p => p.ready)) throw fail('还有玩家未准备');
   room.game = createGame(room.players.map(({ id, name, seat }) => ({ id, name, seat })), room.config, { now, random });
+  synchronizeSeats(room);
   pushMessage(room, '系统', '对局开始，天黑请闭眼。', now);
 }
 function enter(state, room, session, now, autoReady = false) {
-  const existing = currentRoom(state, session, false);
-  if (existing) {
-    if (existing.code === room.code) return;
-    throw fail('你已在其他房间中，请先退出当前房间');
-  }
-  if (room.game) throw fail('该房间已经开始游戏');
-  if (room.players.length >= capacity(room)) throw fail('房间已满');
-  const used = new Set(room.players.map(p => p.seat));
-  let seat = 1; while (used.has(seat)) seat++;
-  room.players.push({ id: session.id, name: session.name, seat, ready: autoReady });
-  session.roomCode = room.code;
+  enterRoom(state.rooms, room, session, autoReady, {}, announce(room, now));
   session.lastSeen = now;
   room.lastActive = now;
-  pushMessage(room, '系统', `${session.name} 加入了房间`, now);
-  if (room.matchmaking && room.players.length === capacity(room)) start(room, now);
+  if (!room.game && room.matchmaking && room.players.length === capacity(room)) start(room, now);
 }
 function newRoom(state, session, data, now, matchmaking = false) {
-  if (currentRoom(state, session, false)) throw fail('请先退出当前房间');
+  if (activeRoom(state.rooms, session.id)) throw fail('请先离开当前玩家席');
   if (state.rooms.size >= MAX_ROOMS) throw fail('当前在线房间较多，请稍后再试', 503);
   const config = validateConfig(matchmaking ? STANDARD_CONFIG : data.config ?? STANDARD_CONFIG);
   let code;
@@ -151,22 +114,29 @@ function newRoom(state, session, data, now, matchmaking = false) {
 }
 function visibleHistory(history, session) { return history.visibility === 'public' || history.players.some(p => p.id === session.id); }
 function cleanup(state, now) {
+  const sessionsById = new Map([...state.sessions.values()].map(s => [s.id, s]));
   for (const room of state.rooms.values()) {
-    const lastSeen = Math.max(room.lastActive, ...room.players.map(p => sessionById(state, p.id)?.lastSeen ?? 0));
+    updateRoom(room, now, announce(room, now));
+    recordFinished(state, room, now);
+    let lastSeen = Math.max(room.lastActive, ...room.players.filter(p => !p.retired).map(p => sessionsById.get(p.id)?.lastSeen ?? 0));
+    for (const id of [...(room.spectators ?? [])]) {
+      const s = sessionsById.get(id);
+      lastSeen = Math.max(lastSeen, s?.lastSeen ?? 0);
+      if (!s || (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 2 * MINUTE)) dropMember(state.rooms, room, s ?? { id, name: '观众' }, announce(room, now));
+    }
     if (now >= (room.recoveryUntil ?? 0) && now - lastSeen > 30 * MINUTE) {
-      for (const p of room.players) { const s = sessionById(state, p.id); if (s?.roomCode === room.code) s.roomCode = null; }
+      for (const s of state.sessions.values()) if (s.roomCode === room.code) s.roomCode = null;
       state.rooms.delete(room.code); continue;
     }
     if (!room.game) {
       for (const p of [...room.players]) {
-        const s = sessionById(state, p.id);
-        if (!s || (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 2 * MINUTE)) dropMember(state, room, s ?? { id: p.id, name: p.name }, now);
+        const s = sessionsById.get(p.id);
+        if (!s || (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 2 * MINUTE)) dropMember(state.rooms, room, s ?? p, announce(room, now));
       }
-    } else if (room.game.phase !== 'finished' && now >= room.game.deadline) advance(room.game, now);
+    }
     trimRoom(room);
-    recordFinished(state, room, now);
   }
-  for (const [key, s] of state.sessions) if (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 24 * HOUR) state.sessions.delete(key);
+  for (const [key, s] of state.sessions) if (now >= (s.recoveryUntil ?? 0) && now - s.lastSeen > 24 * HOUR && ![...state.rooms.values()].some(room => room.players.some(p => p.id === s.id))) state.sessions.delete(key);
   for (const [key, b] of state.limits) if (now >= b.until) state.limits.delete(key);
 }
 
@@ -177,10 +147,10 @@ function handleState(state, request, body, context) {
     if (rawToken) {
       const s = sessionFor(state, hash, now);
       const name = body.name === undefined ? s.name : cleanName(body.name);
-      const room = currentRoom(state, s, false);
-      if (name !== s.name && room?.game && room.game.phase !== 'finished') throw fail('对局中不能修改昵称');
+      const playing = activeRoom(state.rooms, s.id);
+      if (name !== s.name && playing?.game) throw fail('对局中不能修改昵称');
       s.name = name;
-      if (room && !room.game) room.players.find(p => p.id === s.id).name = name;
+      if (playing && !playing.game) playing.players.find(p => p.id === s.id).name = name;
       if (state.standings.has(s.id)) state.standings.get(s.id).name = name;
       return { status: 200, body: { token: rawToken, player: { id: s.id, name: s.name } } };
     }
@@ -191,16 +161,20 @@ function handleState(state, request, body, context) {
     return { status: 201, body: { token: newToken, player: { id: s.id, name: s.name } } };
   }
   const session = sessionFor(state, hash, now);
-  if (request.method === 'POST') rate(state, `write:${session.id}`, 90, MINUTE, now);
-  let room = currentRoom(state, session, false);
+  if (request.method === 'POST') {
+    const typing = path === '/api/action' && body.type === 'typing';
+    rate(state, `${typing ? 'typing' : 'write'}:${session.id}`, typing ? 60 : 90, MINUTE, now);
+  }
+  let room = selectRoom(state.rooms, session, new URL(request.url).searchParams.get('code'), false);
   if (request.method === 'GET') {
-    if (path === '/api/room') return { body: { room: serialize(state, room, session, now) } };
+    if (path === '/api/room') return { body: { room: serialize(state, room, session, now), memberships: memberships(state.rooms, session.id) } };
     if (path === '/api/rooms') return { body: { rooms: [...state.rooms.values()].filter(r => r.visibility === 'public' && !r.game).map(r => ({ code: r.code, name: r.name, playerCount: r.players.length, capacity: capacity(r), config: r.config, phase: 'waiting', matchmaking: r.matchmaking })) } };
     if (path === '/api/history') return { body: { history: [...state.histories.values()].filter(h => visibleHistory(h, session)).sort((a, b) => b.endedAt - a.endedAt).map(h => ({ code: h.code, name: h.name, winner: h.game.winner, round: h.game.round, endedAt: h.endedAt })) } };
     if (/^\/api\/history\/\d{6}$/.test(path)) {
       const h = state.histories.get(path.split('/').at(-1));
       if (!h || !visibleHistory(h, session)) throw fail('对局记录不存在', 404);
-      return { body: { room: { ...h, game: gameView(h.game, session.id) } } };
+      const spectator = !h.players.some(p => p.id === session.id);
+      return { body: { room: { ...h, isSpectator: spectator, messages: messagesFor(h, session.id, spectator), game: gameView(h.game, session.id, spectator) } } };
     }
     if (path === '/api/stats') return { body: { standings: [...state.standings.values()].sort((a, b) => b.wins - a.wins || b.winRate - a.winRate).slice(0, 100) } };
     throw fail('接口不存在', 404);
@@ -215,49 +189,66 @@ function handleState(state, request, body, context) {
       enter(state, room, session, now, room.matchmaking); break;
     }
     case '/api/match': {
-      if (room) { if (!room.matchmaking) throw fail('请先退出当前房间再匹配'); break; }
+      room = activeRoom(state.rooms, session.id);
+      if (room) {
+        if (!room.matchmaking) throw fail('请先退出当前房间再匹配');
+        session.roomCode = room.code;
+        break;
+      }
       room = [...state.rooms.values()].filter(r => r.matchmaking && !r.game && r.players.length < capacity(r)).sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (room && isWatcher(room, session.id)) {
+        let seat = 1;
+        while (room.players.some(p => p.seat === seat)) seat++;
+        placeSeat(state.rooms, room, session, seat, true, {}, announce(room, now));
+      }
       if (room) enter(state, room, session, now, true); else room = newRoom(state, session, {}, now, true);
       break;
     }
     case '/api/leave': {
-      if (room) {
-        if (room.game && room.game.phase !== 'finished') throw fail('对局进行中，暂时不能退出；刷新页面可重新连接');
-        dropMember(state, room, session, now);
-      }
+      if (room) dropMember(state.rooms, room, session, announce(room, now));
       room = null; break;
     }
+    case '/api/seat': {
+      if (!room) throw fail('请先进入房间', 404);
+      placeSeat(state.rooms, room, session, body.seat, room.matchmaking, {}, announce(room, now));
+      if (room.matchmaking && room.players.length === capacity(room)) start(room, now);
+      break;
+    }
     case '/api/ready': {
-      room = currentRoom(state, session);
+      if (!room) throw fail('请先进入房间', 404);
+      requireSeat(room, session.id);
       if (room.game) throw fail('游戏已经开始');
       if (room.matchmaking) throw fail('匹配房间自动准备，点击取消匹配可离开');
       if (typeof body.ready !== 'boolean') throw fail('准备状态无效');
       room.players.find(p => p.id === session.id).ready = body.ready; break;
     }
     case '/api/start': {
-      room = currentRoom(state, session);
+      if (!room) throw fail('请先进入房间', 404);
       if (room.hostId !== session.id) throw fail('只有房主可以开始游戏', 403);
       if (room.game) throw fail('游戏已经开始');
       start(room, now); break;
     }
     case '/api/action': {
-      room = currentRoom(state, session);
+      if (!room) throw fail('请先进入房间', 404);
       if (!room.game) throw fail('游戏尚未开始');
+      allowAction(room, session.id, body.type);
       act(room.game, session.id, body, now); break;
     }
     case '/api/chat': {
-      room = currentRoom(state, session);
+      if (!room) throw fail('请先进入房间', 404);
       if (typeof body.text !== 'string' || !body.text.trim() || [...body.text].length > 500) throw fail('消息需为 1–500 个字符');
       rate(state, `chat:${session.id}`, 12, 10000, now);
       const channel = body.channel ?? 'public';
       if (!['public', 'wolf'].includes(channel)) throw fail('聊天频道无效');
+      if (!deathTurn(room.game, session.id)) requireSeat(room, session.id);
       if (room.game ? !canChat(room.game, session.id, channel) : channel !== 'public') throw fail('当前无法在此频道发言，请等待你的发言阶段');
+      if (channel === 'public' && room.game?.currentSpeakerId === session.id && room.game.phase !== 'finished') act(room.game, session.id, { type: 'typing' }, now);
       pushMessage(room, session.name, body.text.trim(), now, session.id, channel); break;
     }
     default: throw fail('接口不存在', 404);
   }
-  if (room) { room.lastActive = now; trimRoom(room); recordFinished(state, room, now); }
-  return { body: { room: serialize(state, room, session, now) } };
+  if (room) { room.lastActive = now; updateRoom(room, now, announce(room, now)); trimRoom(room); recordFinished(state, room, now); }
+  return { body: { room: serialize(state, room, session, now), memberships: memberships(state.rooms, session.id) } };
 }
 
 /** Fetch-compatible API. Workers supply env.DB; other runtimes supply STATE_STORE. */

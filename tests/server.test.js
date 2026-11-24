@@ -38,6 +38,14 @@ async function makeGame(context, visibility = 'private') {
   return { users, code };
 }
 
+test('independent players behind the local reverse proxy have independent session quotas', async t => {
+  const {request} = await setup(t, {disableRateLimits:false});
+  const create = client => request('/api/session', {body:{name:'访客'}, headers:{'X-Forwarded-For':client}});
+  for (let i = 0; i < 60; i++) assert.equal((await create('192.0.2.10')).status, 201);
+  assert.equal((await create('192.0.2.99, 192.0.2.10')).status, 429);
+  assert.equal((await create('192.0.2.11')).status, 201);
+});
+
 test('health, authentication, session restore and nickname changes preserve identity', async t => {
   const { request, session } = await setup(t);
   assert.deepEqual((await request('/api/health')).data, { ok: true, version: 1, service: 'moonwolf' });
@@ -117,7 +125,7 @@ test('night actions and wolf chat are authorized and privately delivered', async
   const { users, code } = await makeGame(context, 'public');
   const { request, app } = context;
   const game = app.state.rooms.get(code).game;
-  assert.equal(game.phase, 'wolf');
+  assert.equal(game.phase, 'night');
   const wolf = users.find(u => game.players.find(p => p.id === u.player.id).role === 'wolf');
   const good = users.find(u => game.players.find(p => p.id === u.player.id).role !== 'wolf');
   assert.equal((await request('/api/action', { token: good.token, body: { type: 'wolf', targetId: wolf.player.id } })).status, 400);

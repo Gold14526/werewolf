@@ -9,7 +9,7 @@ import * as problem from '../web/problem-content.js';
 // Network replies are authoritative room snapshots, as with the real poll loop.
 const source = (await readFile(new URL('../web/app.js', import.meta.url), 'utf8'))
   .replace(/^import\s[\s\S]*?;\r?\n/gm, '') +
-  '\n;globalThis.frontend={state,render,roomView,refreshData,waitForConnect:()=>connectPromise};';
+  '\n;globalThis.frontend={state,render,roomView,refreshData,updateClock,waitForConnect:()=>connectPromise};';
 const reply = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 const json = value => JSON.parse(JSON.stringify(value));
 
@@ -35,8 +35,15 @@ async function frontend(savedStorage = new Map()) {
     sessionStorage: { getItem() { return null; }, setItem() {} },
     window: { MOONWOLF_CONFIG: { apiBase: '' }, addEventListener() {}, scrollTo() {} },
     navigator: { clipboard: { async writeText(text) { copied.push(text); } } },
-    fetch: async (path, options = {}) => {
-      calls.push({ path, method: options.method || 'GET', body: options.body && JSON.parse(options.body) });
+    fetch: async (url, options = {}) => {
+      const {pathname:path,search}=new URL(url,location.href);
+      const body=options.body&&JSON.parse(options.body);
+      calls.push({ path,search,method:options.method||'GET',body });
+      if(path==='/api/action'&&['vote','sheriff_vote'].includes(body.type)){
+        serverRoom.game.submitted=true;
+        serverRoom.game.myVoteTargetId=body.targetId;
+        return reply({room:serverRoom});
+      }
       return reply(path === '/api/health' ? { ok: true, service: 'moonwolf' } :
         path === '/api/session' ? { token: 'test-token', player: { id: 'me', name: '测试玩家' } } :
           path === '/api/room' ? { room: serverRoom } : path === '/api/rooms' ? { rooms: [] } :
@@ -74,7 +81,7 @@ async function frontend(savedStorage = new Map()) {
     app.render();
   };
   return { app, elements, calls, copied, navigations, location, document, storage: savedStorage,
-    click, field, edit, submit, putInRoom, html: () => elements.get('#app').innerHTML,
+    click, field, edit, submit, putInRoom, window:context.window, html: () => elements.get('#app').innerHTML,
     setServerRoom: room => { serverRoom = json(room); } };
 }
 
@@ -109,68 +116,51 @@ test('the problem shell keeps twelve lobby seats and real room entry controls', 
   for (const action of ['match', 'create', 'join-modal', 'demo']) assert.match(html, new RegExp(`data-do="${action}"`));
 });
 
-test('a valid avatar selects a vote without sending it; confirmation sends exactly that target', async () => {
-  const ui = await frontend();
-  ui.putInRoom(gameView());
-  assert.match(ui.html(), /<button[^>]*data-target="target"/);
-  assert.doesNotMatch(ui.html(), /data-target="(?:me|dead|outside)"/);
-  const before = ui.calls.length;
-  await ui.click({ target: 'target' });
-  assert.equal(ui.app.state.target, 'target');
-  assert.equal(ui.calls.length, before);
-  assert.equal(actions(ui).length, 0);
-  await ui.click({ action: 'confirm' });
-  assert.deepEqual(actions(ui).map(call => call.body), [{ type: 'vote', targetId: 'target' }]);
+test('avatar votes immediately and both another avatar and abstention replace the ballot', async () => {
+  const ui=await frontend();
+  const game=gameView();
+  game.action.targets.push(game.players[3]);
+  ui.putInRoom(game);
+  assert.match(ui.html(),/<button[^>]*data-target="target"/);
+  assert.doesNotMatch(ui.html(),/data-action="confirm"|data-target="(?:me|dead)"/);
+  await Promise.all([ui.click({target:'target'}),ui.click({target:'outside'}),ui.click({action:'abstain'})]);
+  assert.match(ui.html(),/当前已弃权/);
+  await ui.click({target:'target'});
+  assert.deepEqual(actions(ui).map(c=>c.body),['target','outside',null,'target'].map(targetId=>({type:'vote',targetId,turnDeadline:game.deadline})));
+  assert.match(ui.html(),/当前投给 2 号 目标玩家/);
+  assert.ok(actions(ui).every(c=>c.search==='?code=123456'));
 });
 
-test('self, dead and noncandidate avatar clicks cannot replace an eligible voting target', async () => {
-  const ui = await frontend();
-  ui.putInRoom(gameView({ phase: 'sheriff_vote', phaseLabel: '警长投票',
-    action: { type: 'sheriff_vote', targets: [{ id: 'target', name: '目标玩家', seat: 2 }] } }));
-  for (const id of ['me', 'dead', 'outside', 'missing']) {
-    await ui.click({ target: id });
-    assert.equal(ui.app.state.target, null, id + ' must not be selectable');
-  }
-  await ui.click({ target: 'target' });
-  for (const id of ['me', 'dead', 'outside']) {
-    await ui.click({ target: id });
-    assert.equal(ui.app.state.target, 'target', 'invalid target must not replace the valid selection');
-  }
-  assert.equal(actions(ui).length, 0);
-  await ui.click({ action: 'confirm' });
-  assert.deepEqual(actions(ui).at(-1).body, { type: 'sheriff_vote', targetId: 'target' });
+test('a sheriff voter can revise a submitted ballot and only eligible avatars accept clicks', async () => {
+  const ui=await frontend();
+  const game=gameView({phase:'sheriff_vote',phaseLabel:'警长投票',submitted:true,myVoteTargetId:null,
+    action:{type:'sheriff_vote',targets:[{id:'target',name:'目标玩家',seat:2}]}});
+  ui.putInRoom(game);
+  for(const id of ['me','dead','outside','missing'])await ui.click({target:id});
+  assert.equal(actions(ui).length,0);
+  await ui.click({target:'target'});
+  assert.deepEqual(actions(ui).at(-1).body,{type:'sheriff_vote',targetId:'target',turnDeadline:game.deadline});
 });
 
-test('submitted, nonactionable and replay views cannot select or submit another vote', async () => {
-  for (const overrides of [{ submitted: true }, { actionable: false }]) {
-    const ui = await frontend();
-    ui.putInRoom(gameView(overrides));
-    await ui.click({ target: 'target' });
-    await ui.click({ action: 'confirm' });
-    assert.equal(ui.app.state.target, null);
-    assert.equal(actions(ui).length, 0);
-  }
-  const ui = await frontend();
+test('non-voters and replay views cannot cast or change ballots', async () => {
+  const ui=await frontend();
+  ui.putInRoom(gameView({actionable:false,submitted:true}));
+  await ui.click({target:'target'});await ui.click({action:'abstain'});
   ui.putInRoom(gameView());
-  ui.app.state.replay = json(ui.app.state.room);
-  ui.app.render();
-  await ui.click({ target: 'target' });
-  await ui.click({ action: 'confirm' });
-  assert.equal(ui.app.state.target, null);
-  assert.equal(actions(ui).length, 0);
+  ui.app.state.replay=json(ui.app.state.room);ui.app.render();
+  await ui.click({target:'target'});await ui.click({action:'abstain'});
+  assert.equal(actions(ui).length,0);
 });
 
-test('a room poll invalidating the selected target prevents a stale vote from being posted', async () => {
-  const ui = await frontend();
+test('a room poll removing a target prevents a stale avatar click from sending a ballot', async () => {
+  const ui=await frontend();
   ui.putInRoom(gameView());
-  await ui.click({ target: 'target' });
-  const updated = json(ui.app.state.room);
-  updated.game.action.targets = [];
-  updated.game.players.find(player => player.id === 'target').alive = false;
-  ui.setServerRoom(updated);
-  await ui.app.refreshData();
-  await ui.click({ action: 'confirm' });
-  assert.equal(actions(ui).length, 0);
+  const updated=json(ui.app.state.room);
+  updated.game.action.targets=[];
+  updated.game.players.find(p=>p.id==='target').alive=false;
+  ui.setServerRoom(updated);await ui.app.refreshData();
+  await ui.click({target:'target'});
+  assert.equal(actions(ui).length,0);
 });
 
 test('code language and escaped draft survive tab changes, live polling and a new page session', async () => {
@@ -274,7 +264,7 @@ test('提交评测 is inert even with a real vote selected and a live room', asy
   assert.equal(ui.location.href, before.url);
   assert.equal(ui.navigations.length, before.navigations);
   assert.equal(button.disabled, false);
-  assert.equal(actions(ui).length, 0);
+  assert.equal(actions(ui).length, 1);
 });
 
 test('night action controls and wolf chat exist only in 提交文件; code area stays independent', async () => {
@@ -319,7 +309,7 @@ test('相关讨论 is the inline public channel and the current speaker can send
   assert.deepEqual(ui.calls.filter(call => call.path === '/api/chat').map(call => call.body),
     [{ text: '我是好人，请听我发言。', channel: 'public' }]);
   await ui.click({ do: 'pass' });
-  assert.deepEqual(actions(ui).map(call => call.body), [{ type: 'pass' }]);
+  assert.deepEqual(actions(ui).map(call => call.body), [{ type: 'pass',turnDeadline:ui.app.state.room.game.deadline }]);
 });
 
 test('sidebar toggles independently, hides private roles in every tab, and hides them again when the room changes', async () => {
@@ -366,4 +356,181 @@ test('closing the ad survives renders without making a request', async () => {
   await ui.click({problemTab:'submit'});
   assert.doesNotMatch(ui.html(), /luogu-recommended\.png/);
   assert.equal(ui.calls.length,before);
+});
+
+test('witch sees the actual victim in the save control while a poison target is independent', async () => {
+  const ui=await frontend();
+  const witch=gameView({phase:'night',phaseLabel:'夜间',myRole:'witch'});
+  const victim=witch.players[1];
+  witch.privateInfo={nightVictim:victim,potions:{save:true,poison:true}};
+  witch.action={type:'witch',targets:witch.players.filter(p=>p.alive),choices:['skip','save','poison'],deadline:witch.deadline-30000};
+  ui.putInRoom(witch);
+  assert.equal((ui.html().match(/data-deadline="/g)||[]).length,1);
+  assert.doesNotMatch(ui.html(),/今夜被刀|使用解药|用毒目标/);
+  await ui.click({do:'night-actions'});
+  assert.match(ui.html(),/对 2 号 目标玩家 使用解药/);
+  await ui.click({target:'outside'});await ui.click({action:'save'});
+  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'target',choice:'save'});
+  await ui.click({target:'outside'});await ui.click({action:'poison'});
+  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'outside',choice:'poison'});
+  witch.action.choices=['skip','poison'];
+  witch.privateInfo.nightVictim=null;
+  ui.putInRoom(witch);
+  assert.match(ui.html(),/无人被刀/);assert.doesNotMatch(ui.html(),/data-action="save"/);
+  witch.privateInfo={potions:{save:false,poison:true}};
+  ui.putInRoom(witch);
+  assert.doesNotMatch(ui.html(),/无人被刀|今夜被刀|data-action="save"/);
+});
+
+test('the current speaker sees the last 15 seconds under the input and an AFK player explicitly returns', async () => {
+  const ui=await frontend();
+  const game=gameView({phase:'discussion',phaseLabel:'轮流发言',currentSpeakerId:'me',canSpeak:true,
+    action:{type:'pass',targets:[]},inactivityDeadline:Date.now()+15000});
+  ui.putInRoom(game);
+  await ui.click({sidebarToggle:'discussion'});
+  assert.match(ui.html(),/id="draft-public"[\s\S]*?<\/textarea><small id="afk-warning"/);
+  const label=ui.field('afk-warning',{dataset:{inactivity:String(Date.now()+14500)}});
+  ui.app.updateClock();
+  assert.equal(label.hidden,false);assert.match(label.textContent,/若再 15 秒不发言，将被判定为挂机/);
+  label.dataset.inactivity=Date.now()+16001;ui.app.updateClock();assert.equal(label.hidden,true);
+  await ui.edit('code-editor','writing code');
+  assert.equal(actions(ui).length,0);
+  await ui.edit('draft-public','正在发言');
+  assert.deepEqual(actions(ui).at(-1).body,{type:'typing',turnDeadline:game.deadline});
+  ui.putInRoom({...game,myAfk:true,actionable:false,currentSpeakerId:'target',canSpeak:false,inactivityDeadline:null});
+  assert.match(ui.html(),/data-do="return">回到游戏/);
+  await ui.click({do:'return'});assert.deepEqual(actions(ui).at(-1).body,{type:'return'});
+});
+
+test('empty seats accept seat requests; spectators can navigate between games and see public chat only', async () => {
+  const ui=await frontend();
+  const players=[{id:'me',name:'测试玩家',seat:1,ready:true}];
+  ui.putInRoom(null,{players});
+  assert.match(ui.html(),/data-do="observe"/);
+  assert.match(ui.html(),/data-seat="2"/);assert.doesNotMatch(ui.html(),/data-seat="1"/);
+  await ui.click({seat:'2'});await ui.click({do:'observe'});
+  assert.deepEqual(ui.calls.filter(c=>c.path==='/api/seat').map(c=>c.body),[{seat:2},{seat:null}]);
+  const publicView=gameView({myRole:null,submitted:false,action:null,actionable:false});
+  ui.app.state.memberships=[{code:'123456',name:'原来的房间'},{code:'456789',name:'新房间'}];
+  ui.putInRoom(publicView,{isSpectator:true,messages:[
+    {system:true,at:1,text:'小张加入观战席。'},{playerId:'target',name:'目标玩家',at:2,text:'大家好'}]});
+  await ui.click({sidebarToggle:'discussion'});
+  assert.match(ui.html(),/小张加入观战席/);assert.match(ui.html(),/2 号 目标玩家<\/strong> 大家好/);
+  assert.doesNotMatch(ui.html(),/id="draft-public"|data-seat=|data-target=|data-do="ready"/);
+  assert.match(ui.html(),/data-do="leave"/);assert.match(ui.html(),/id="switch-room"/);
+  await ui.click({page:'lobby'});
+  assert.match(ui.html(),/data-do="match"/);
+  await ui.edit('switch-room','456789','change');
+  assert.deepEqual(ui.calls.filter(c=>c.path==='/api/join').at(-1).body,{code:'456789'});
+});
+
+test('room updates retain the document scroll and independently follow the end of the chat log', async () => {
+  const ui = await frontend();
+  ui.putInRoom(gameView());
+  await ui.click({ sidebarToggle: 'discussion' });
+  const viewport = ui.window;
+  viewport.scrollX = 0;
+  viewport.scrollY = 720;
+  viewport.scrollTo = (x, y) => { viewport.scrollX = x; viewport.scrollY = y; };
+
+  const makeFeed = height => ({
+    id: 'feed-public', clientHeight: 200, scrollHeight: height, top: 0,
+    get scrollTop() { return this.top; },
+    set scrollTop(y) { this.top = Math.max(0, Math.min(y, this.scrollHeight - this.clientHeight)); },
+  });
+  let feed = makeFeed(800);
+  feed.scrollTop = 130;
+  ui.document.querySelectorAll = key => key === '.chat-feed' ? [feed] : [];
+  const root = ui.elements.get('#app');
+  let markup = root.innerHTML;
+  Object.defineProperty(root, 'innerHTML', {get: () => markup, set(value) {
+    markup = value;
+    viewport.scrollY = 0;
+    feed = makeFeed(feed.scrollHeight + 30);
+  }});
+  const room = json(ui.app.state.room);
+  for (let count = 1; count <= 2; count++) {
+    if (count === 2) feed.scrollTop = feed.scrollHeight;
+    room.messages.push({ name:'玩家', seat:2, text:'新发言 ' + count, at:Date.now() });
+    ui.setServerRoom(room);
+    await ui.app.refreshData();
+    assert.equal(viewport.scrollY, 720);
+    assert.equal(feed.scrollTop, count === 1 ? 130 : feed.scrollHeight - feed.clientHeight);
+  }
+  await ui.click({page:'rules'});
+  assert.equal(viewport.scrollY, 0);
+});
+
+test('public and wolf drafts remain scoped to their original room when switching games', async () => {
+  const ui = await frontend();
+  ui.putInRoom(gameView());
+  await ui.edit('draft-public', '第一间的草稿');
+  await ui.edit('draft-wolf', '第一间的狼队草稿');
+  ui.putInRoom(gameView(), {code:'654321'});
+  assert.equal(ui.app.state.draft, '');
+  assert.equal(ui.app.state.wolfDraft, '');
+  await ui.edit('draft-public', '第二间的草稿');
+  ui.putInRoom(gameView());
+  assert.equal(ui.app.state.draft, '第一间的草稿');
+  assert.equal(ui.app.state.wolfDraft, '第一间的狼队草稿');
+  ui.putInRoom(gameView(), {code:'654321'});
+  assert.equal(ui.app.state.draft, '第二间的草稿');
+  assert.equal(ui.app.state.wolfDraft, '');
+});
+
+test('a live update changes chat controls without detaching a composing textarea or its form', async () => {
+  const ui = await frontend();
+  ui.putInRoom(gameView());
+  await ui.click({sidebarToggle:'discussion'});
+
+  // Model mounted nodes and the sibling operations used by the native DOM.
+  // IME state lives on the original textarea and cannot be copied to a new one.
+  function node(nodeName, id = '', children = []) {
+    const element = {nodeName, id, childNodes:children, attributes:[], getAttributeNames:() => [],
+      isEqualNode(other) { return this === other; },
+      remove() {
+        const peers = this.parentNode.childNodes;
+        peers.splice(peers.indexOf(this), 1);
+        this.parentNode = null;
+      },
+      before(...nodes) { this.insertSiblings(nodes, 0); },
+      after(...nodes) { this.insertSiblings(nodes, 1); },
+      insertSiblings(nodes, offset) {
+        const parent = this.parentNode;
+        for (const child of nodes) {
+          child.remove();
+          child.parentNode = parent;
+        }
+        parent.childNodes.splice(parent.childNodes.indexOf(this) + offset, 0, ...nodes);
+      },
+    };
+    for (const child of children) child.parentNode = element;
+    return element;
+  }
+  const draft = node('TEXTAREA','draft-public');
+  const form = node('FORM','',[draft, node('BUTTON')]);
+  const root = ui.elements.get('#app');
+  form.parentNode = root;
+  root.childNodes = [form];
+  draft.value = '正在输入拼音';
+  draft.selectionStart = 2;
+  draft.selectionEnd = 5;
+  ui.elements.set('#draft-public', draft);
+  ui.document.activeElement = draft;
+  const freshDraft = node('TEXTAREA','draft-public');
+  const updatedControls = node('BUTTON');
+  const newForm = node('FORM','',[freshDraft, updatedControls]);
+  const incomingFeed = node('DIV','feed-public');
+  const template = node('#document-fragment','',[incomingFeed, newForm]);
+  template.querySelector = () => freshDraft;
+  ui.document.createElement = type => { assert.equal(type, 'template'); return {content:template}; };
+  const room = json(ui.app.state.room);
+  room.messages.push({name:'新玩家',seat:2,text:'继续输入时收到的新消息',at:Date.now()});
+  ui.setServerRoom(room);
+  await ui.app.refreshData();
+  assert.deepEqual(root.childNodes, [incomingFeed, form]);
+  assert.deepEqual(form.childNodes, [draft, updatedControls]);
+  assert.equal(ui.document.activeElement, draft);
+  assert.equal(draft.value, '正在输入拼音');
+  assert.deepEqual([draft.selectionStart, draft.selectionEnd], [2, 5]);
 });
