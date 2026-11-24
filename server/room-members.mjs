@@ -30,7 +30,7 @@ function watch(room, person, announce) {
   room.spectators ??= [];
   if (!isWatcher(room, person.id)) {
     room.spectators.push(person.id);
-    announce(person.name + ' 加入了观战席');
+    announce?.(person.name + ' 加入了观战席');
   }
 }
 
@@ -51,7 +51,7 @@ function preserveMessageSeats(room) {
   room.messageSeatsVersion = 1;
 }
 
-export function updateRoom(room, now, announce) {
+export function updateRoom(room, now) {
   preserveMessageSeats(room);
   room.config.otherNightSeconds ??= 30;
   room.config.witchSelfSave ??= 'first';
@@ -62,7 +62,7 @@ export function updateRoom(room, now, announce) {
   for (const person of room.players) {
     if (!person.retired && room.game.players.some(p => p.id === person.id && !p.alive)) {
       person.retired = true;
-      watch(room, person, announce);
+      watch(room, person);
     }
   }
 }

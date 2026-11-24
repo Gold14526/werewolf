@@ -28,6 +28,12 @@ const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
+export function roleLimit(role) {
+  if (role === 'wolf') return 6;
+  if (role === 'villager') return 12;
+  return isWolfRole(role) ? 1 : 18;
+}
+
 export function validateConfig(input = STANDARD_CONFIG) {
   assert(input && typeof input === 'object' && !Array.isArray(input), '房间配置不正确');
   const rawRoles = input.roles ?? STANDARD_CONFIG.roles;
@@ -37,7 +43,7 @@ export function validateConfig(input = STANDARD_CONFIG) {
   for (const role of Object.keys(ROLE_INFO)) {
     const count = rawRoles[role] ?? 0;
     assert(Number.isInteger(count) && count >= 0, '身份人数必须为非负整数');
-    assert(count <= (role === 'wolf' ? 6 : role === 'villager' ? 12 : 1), '该身份人数超出范围');
+    assert(count <= roleLimit(role), '该身份人数超出范围');
     roles[role] = count;
   }
   const total = Object.values(roles).reduce((a, b) => a + b, 0);
@@ -84,8 +90,11 @@ export function createGame(players, input = STANDARD_CONFIG, { now = Date.now(),
   const seated = config.shuffleSeats ? shuffled(players, random) : players;
   const game = {
     config, phase: 'night', round: 1, deadline: 0, winner: null,
-    players: seated.map((p, i) => ({ id: p.id, name: p.name, seat: config.shuffleSeats ? i + 1 : (p.seat ?? i + 1), role: roles[i], alive: true })),
-    log: [], audit: [], actions: Object.create(null), night: {}, previousGuard: null, potions: { save: true, poison: true },
+    players: seated.map((p, i) => ({ id: p.id, name: p.name, seat: config.shuffleSeats ? i + 1 : (p.seat ?? i + 1), role: roles[i], alive: true,
+      ...(roles[i] === 'witch' ? { potions: { save: true, poison: true } } : {}),
+      ...(roles[i] === 'guard' ? { previousGuard: null } : {}),
+    })),
+    log: [], audit: [], actions: Object.create(null), night: {},
     investigations: Object.create(null), pendingHunters: [], hunterUsed: [], resume: null,
     currentSpeakerId: null, speechQueue: [], lastWordsQueue: [], runoff: false, voteTargets: null,
     sheriffId: null, sheriffElectionDone: false, sheriffCandidates: [], sheriffVoters: [], sheriffRunoff: false, pendingBadgeId: null, knightUsed: [],
@@ -129,7 +138,7 @@ function beginNight(game, now) {
   game.voteTargets = null;
   game.speechQueue = [];
   game.inactivityDeadline = null;
-  game.night = { guard: null, victim: null, poison: null, saved: false };
+  game.night = { guards: [], victim: null, poisons: [], saved: false };
   game.actions = Object.create(null);
   game.currentSpeakerId = null;
   scheduleNight(game, now);
@@ -137,29 +146,36 @@ function beginNight(game, now) {
 
 // Windows store offsets from the next checkpoint. Restart recovery can move the
 // single game.deadline and every public and private countdown moves with it.
-function scheduleNight(game, now, legacyPhase = null, elapsed = 0) {
-  const other = game.config.otherNightSeconds * 1000;
-  const wolf = game.config.nightSeconds * 1000;
-  const remaining = (role, duration) => legacyPhase === role ? Math.max(0, duration - elapsed) : duration;
+function scheduleNight(game, now, firstRole = 'guard', elapsed = 0) {
   const windows = [];
-  const unfinished = role => !legacyPhase || NIGHT_PHASES.indexOf(role) >= NIGHT_PHASES.indexOf(legacyPhase);
-  if (unfinished('wolf')) windows.push({ role: 'wolf', end: remaining('wolf', wolf) });
-  for (const role of ['guard', 'seer']) {
-    if (game.config.roles[role] && unfinished(role)) windows.push({ role, end: remaining(role, other) });
+  let end = 0;
+  for (const role of NIGHT_PHASES.slice(NIGHT_PHASES.indexOf(firstRole))) {
+    // Every valid deck has wolves. Keep configured dead roles on the clock as well.
+    if (role !== 'wolf' && !game.config.roles[role]) continue;
+    const seconds = role === 'wolf' ? game.config.nightSeconds : game.config.otherNightSeconds;
+    end += Math.max(0, seconds * 1000 - (role === firstRole ? elapsed : 0));
+    windows.push({ role, end });
   }
-  if (game.config.roles.witch) {
-    const wolfEnd = windows.find(w => w.role === 'wolf')?.end ?? 0;
-    windows.push({ role: 'witch', end: wolfEnd + remaining('witch', other) });
-  }
-  windows.sort((a, b) => a.end - b.end);
   game.phase = 'night';
+  game.night.sequential = true;
   game.deadline = now + windows[0].end;
   game.night.windows = windows.map(w => ({ role: w.role, offset: w.end - windows[0].end }));
 }
 
 export function migrateNightConfig(game, now = Date.now()) {
   const oldTimer = game.config.otherNightSeconds == null;
-  const changed = oldTimer || game.config.witchSelfSave == null || game.config.shuffleSeats == null;
+  // Snapshots written before duplicate good roles used a single potion inventory
+  // and last guard target. Attach those to the original actors, alive or dead.
+  const oldResources = own(game, 'potions') || own(game, 'previousGuard');
+  if (oldResources) {
+    for (const actor of game.players) {
+      if (actor.role === 'witch' && !actor.potions) actor.potions = { ...potionsFor(game, actor) };
+      if (actor.role === 'guard' && !own(actor, 'previousGuard')) actor.previousGuard = game.previousGuard ?? null;
+    }
+    delete game.potions;
+    delete game.previousGuard;
+  }
+  const changed = oldTimer || oldResources || game.config.witchSelfSave == null || game.config.shuffleSeats == null;
   game.config.otherNightSeconds ??= 30;
   game.config.witchSelfSave ??= 'first';
   game.config.shuffleSeats ??= false;
@@ -186,12 +202,18 @@ function nightTurn(game, actor) {
   if (game.phase !== 'night' || !actor?.alive) return null;
   const role = isWolfRole(actor.role) ? 'wolf' : actor.role;
   const windows = game.night.windows;
+  if (game.night.sequential) return windows[0].role === role ? windows[0] : null;
+  // A saved parallel night retains the windows, ballots and private deadlines it opened with.
   if (role === 'witch' && windows.some(w => w.role === 'wolf')) return null;
   return windows.find(w => w.role === role) ?? null;
 }
-function canSave(game, witchId) {
-  if (!game.potions.save || !game.night.victim) return false;
-  return game.night.victim !== witchId || game.config.witchSelfSave === 'always' ||
+function potionsFor(game, witch) {
+  return witch.potions ?? game.potions ?? { save: true, poison: true };
+}
+
+function canSave(game, witch) {
+  if (!potionsFor(game, witch).save || !game.night.victim) return false;
+  return game.night.victim !== witch.id || game.config.witchSelfSave === 'always' ||
     (game.config.witchSelfSave === 'first' && game.round === 1);
 }
 function wolfBallots(game) {
@@ -341,11 +363,14 @@ function resolveNight(game, now, resume = 'discussion') {
     addLog(game, '天亮前进行警长竞选；死讯将在竞选结束后公布。请选择是否上警。', now);
     return;
   }
-  const { victim, guard, poison, saved } = game.night;
+  const { victim, saved } = game.night;
+  // A restored night can already have settled the guard or witch under the old format.
+  const guards = game.night.guards ?? (game.night.guard ? [game.night.guard] : []);
+  const poisons = game.night.poisons ?? (game.night.poison ? [game.night.poison] : []);
   const deaths = new Map();
   // Exactly one of guard protection and witch rescue prevents the wolf kill.
-  if (victim && ((guard === victim) === saved)) deaths.set(victim, 'wolf');
-  if (poison) deaths.set(poison, 'poison');
+  if (victim && (guards.includes(victim) === saved)) deaths.set(victim, 'wolf');
+  for (const id of poisons) deaths.set(id, 'poison');
   const newlyDead = [...deaths.keys()].filter(id => player(game, id)?.alive);
   for (const [id, cause] of deaths) eliminate(game, id, cause);
   if (game.round === 1) game.lastWordsQueue.push(...newlyDead);
@@ -373,27 +398,41 @@ function checkWinner(game, now) {
 }
 
 function resolveNightRole(game, phase, now) {
-  const id = live(game).find(p => p.role === phase)?.id;
-  if (phase === 'guard') {
-    game.night.guard = game.actions[id]?.targetId ?? null;
-    game.previousGuard = game.night.guard;
-    addAudit(game, id ? `${player(game, id).seat} 号守卫守护：${targetLabel(game, game.night.guard)}。` : '守卫已出局，本夜无守护。', now);
-  } else if (phase === 'wolf') {
+  if (phase === 'wolf') {
     game.night.victim = plurality(wolfBallots(game));
     const ballots = live(game).filter(p => isWolfRole(p.role)).map(p => `${p.seat} 号→${targetLabel(game, game.actions[p.id]?.targetId)}`).join('，');
     addAudit(game, `狼人投票：${ballots}；最终袭击：${targetLabel(game, game.night.victim)}。`, now);
+    return;
   }
-  else if (phase === 'seer') {
-    const target = player(game, game.actions[id]?.targetId);
-    if (target) {
-      (game.investigations[id] ??= []).push({ round: game.round, id: target.id, seat: target.seat, name: target.name, team: ROLE_INFO[target.role].team });
+  const actors = live(game).filter(p => p.role === phase);
+  if (!actors.length) addAudit(game, `${ROLE_INFO[phase].name}已全部出局，本夜无行动。`, now);
+  if (phase === 'guard') game.night.guards = [];
+  if (phase === 'witch') game.night.poisons = [];
+  for (const actor of actors) {
+    const action = own(game.actions, actor.id) ? game.actions[actor.id] : null;
+    const target = player(game, action?.targetId);
+    if (phase === 'guard') {
+      actor.previousGuard = target?.id ?? null;
+      if (target && !game.night.guards.includes(target.id)) game.night.guards.push(target.id);
+      addAudit(game, `${actor.seat} 号守卫守护：${targetLabel(game, actor.previousGuard)}。`, now);
+    } else if (phase === 'seer') {
+      if (target) {
+        const result = { round: game.round, id: target.id, seat: target.seat, name: target.name, team: ROLE_INFO[target.role].team };
+        const prior = own(game.investigations, actor.id) ? game.investigations[actor.id] : [];
+        game.investigations = { ...game.investigations, [actor.id]: [...prior, result] };
+      }
+      addAudit(game, `${actor.seat} 号预言家${target ? `查验 ${target.seat} 号，结果为${isWolfRole(target.role) ? '狼人' : '好人'}` : '未进行查验'}。`, now);
+    } else if (phase === 'witch') {
+      actor.potions ??= { ...potionsFor(game, actor) };
+      if (action?.choice === 'save') {
+        game.night.saved = true;
+        actor.potions.save = false;
+      } else if (action?.choice === 'poison') {
+        if (!game.night.poisons.includes(target.id)) game.night.poisons.push(target.id);
+        actor.potions.poison = false;
+      }
+      addAudit(game, `${actor.seat} 号女巫${action?.choice === 'save' ? `使用解药救助 ${targetLabel(game, game.night.victim)}` : action?.choice === 'poison' ? `使用毒药毒杀 ${targetLabel(game, action.targetId)}` : '未使用药剂'}。`, now);
     }
-    addAudit(game, id ? `${player(game, id).seat} 号预言家${target ? `查验 ${target.seat} 号，结果为${isWolfRole(target.role) ? '狼人' : '好人'}` : '未进行查验'}。` : '预言家已出局，本夜无查验。', now);
-  } else if (phase === 'witch') {
-    const action = game.actions[id];
-    if (action?.choice === 'save') { game.night.saved = true; game.potions.save = false; }
-    else if (action?.choice === 'poison') { game.night.poison = action.targetId; game.potions.poison = false; }
-    addAudit(game, id ? `${player(game, id).seat} 号女巫${action?.choice === 'save' ? `使用解药救助 ${targetLabel(game, game.night.victim)}` : action?.choice === 'poison' ? `使用毒药毒杀 ${targetLabel(game, action.targetId)}` : '未使用药剂'}。` : '女巫已出局，本夜未用药。', now);
   }
 }
 
@@ -583,15 +622,20 @@ export function act(game, playerId, action, now = Date.now()) {
     }
     return game;
   }
-  const actionPhase = game.phase === 'night' ? nightTurn(game, actor)?.role : game.phase;
+  const turn = nightTurn(game, actor);
+  const actionPhase = game.phase === 'night' ? turn?.role : game.phase;
   assert(action.type === actionPhase, '当前不是该行动阶段');
   assert(eligible(game).includes(playerId), '你不能在此阶段行动');
-  assert(VOTE_PHASES.includes(game.phase) || !own(game.actions, playerId), '你已经提交了本轮行动');
+  if (turn) {
+    if (action.round != null) assert(action.round === game.round, '本夜已结束，请刷新对局状态');
+    if (action.turnDeadline != null) assert(action.turnDeadline === game.deadline + turn.offset, '行动时间已变更，请刷新对局状态');
+  }
+  assert(turn || VOTE_PHASES.includes(game.phase) || !own(game.actions, playerId), '你已经提交了本轮行动');
   const targetId = action.targetId ?? null;
   assert(targetId === null || typeof targetId === 'string', '目标编号不正确');
   const target = targetId === null ? null : player(game, targetId);
   assert(targetId === null || (target && target.alive), '请选择仍在场的玩家');
-  if (actionPhase === 'guard') assert(targetId === null || targetId !== game.previousGuard, '不能连续两晚守护同一名玩家');
+  if (actionPhase === 'guard') assert(targetId === null || targetId !== actor.previousGuard, '不能连续两晚守护同一名玩家');
   if (actionPhase === 'seer') assert(targetId !== playerId, '不能查验自己');
   if (game.phase === 'vote') {
     assert(targetId !== playerId, '不能投票给自己');
@@ -609,13 +653,13 @@ export function act(game, playerId, action, now = Date.now()) {
     choice = action.choice ?? 'skip';
     assert(['skip', 'save', 'poison'].includes(choice), '女巫行动不正确');
     if (choice === 'save') {
-      assert(game.potions.save && game.night.victim, '当前不能使用解药');
-      assert(canSave(game, actor.id), '本晚不能自救');
+      assert(potionsFor(game, actor).save && game.night.victim, '当前不能使用解药');
+      assert(canSave(game, actor), '本晚不能自救');
       assert(targetId === game.night.victim, '请选择本夜被刀的玩家使用解药');
-    } else if (choice === 'poison') assert(game.potions.poison && target, '请选择毒药目标，且必须保有毒药');
+    } else if (choice === 'poison') assert(potionsFor(game, actor).poison && target, '请选择毒药目标，且必须保有毒药');
     else assert(targetId === null, '放弃用药时不能选择目标');
   }
-  game.actions[playerId] = { targetId, ...(choice ? { choice } : {}) };
+  game.actions = { ...game.actions, [playerId]: { targetId, ...(choice ? { choice } : {}) } };
   if (game.phase !== 'night' && !VOTE_PHASES.includes(game.phase) && eligible(game).every(id => own(game.actions, id))) finishPhase(game, now);
   return game;
 }
@@ -634,46 +678,47 @@ export function viewGame(game, viewerId) {
   // Only a room-authorized spectator is passed as null by the server.
   const viewer = viewerId === null ? { id: null, role: null, alive: false } : player(game, viewerId);
   assert(viewer, '你不在这个房间中');
-  const submitted = own(game.actions, viewerId);
+  const submitted = viewerId !== null && own(game.actions, viewerId);
   const canPass = viewerId !== null && SPEECH_PHASES.includes(game.phase) && game.currentSpeakerId === viewerId;
-  const actionable = canPass || (eligible(game).includes(viewerId) && (!submitted || VOTE_PHASES.includes(game.phase)));
+  const turn = nightTurn(game, viewer);
+  const actionable = canPass || (eligible(game).includes(viewerId) && (!submitted || Boolean(turn) || VOTE_PHASES.includes(game.phase)));
   const publicPlayer = p => ({ id: p.id, name: p.name, seat: p.seat, alive: p.alive,
     ...(p.foolRevealed ? { foolRevealed: true } : {}),
     ...(game.phase === 'finished' || p.revealed || p.id === viewerId || (isWolfRole(viewer.role) && isWolfRole(p.role)) ? { role: p.role } : {}),
   });
   let action = null;
-  const turn = nightTurn(game, viewer);
   const actionPhase = turn?.role ?? game.phase;
   const privateInfo = {};
-  if (viewer.role === 'seer') privateInfo.results = (game.investigations[viewerId] ?? []).map(r => ({ ...r }));
+  if (viewer.role === 'seer') privateInfo.results = (own(game.investigations, viewerId) ? game.investigations[viewerId] : []).map(r => ({ ...r }));
   if (isWolfRole(viewer.role)) {
     privateInfo.wolfTeammates = game.players.filter(p => isWolfRole(p.role) && p.id !== viewerId).map(p => ({ id: p.id, name: p.name, seat: p.seat }));
     if (turn?.role === 'wolf') privateInfo.wolfVotes = Object.entries(wolfBallots(game)).map(([playerId, action]) => ({ playerId, targetId: action.targetId }));
   }
   if (viewer.role === 'witch') {
-    privateInfo.potions = { ...game.potions };
+    privateInfo.potions = { ...potionsFor(game, viewer) };
     // An empty attack is explicit. After using the antidote, a victim's identity stays hidden.
-    if (turn?.role === 'witch' && (game.potions.save || !game.night.victim)) {
+    if (turn?.role === 'witch' && (privateInfo.potions.save || !game.night.victim)) {
       const victim = player(game, game.night.victim);
       privateInfo.nightVictim = victim ? { id: victim.id, name: victim.name, seat: victim.seat } : null;
     }
   }
   if (actionable) {
     let targets = live(game);
-    if (actionPhase === 'guard') targets = targets.filter(p => p.id !== game.previousGuard);
+    if (actionPhase === 'guard') targets = targets.filter(p => p.id !== (own(viewer, 'previousGuard') ? viewer.previousGuard : game.previousGuard));
     if (actionPhase === 'seer') targets = targets.filter(p => p.id !== viewerId);
     if (game.phase === 'vote') targets = targets.filter(p => !p.foolRevealed && p.id !== viewerId && (!game.runoff || game.voteTargets.includes(p.id)));
     if (game.phase === 'sheriff_vote') targets = targets.filter(p => game.sheriffCandidates.includes(p.id));
     if (game.phase === 'sheriff_transfer') targets = targets.filter(p => !p.foolRevealed);
     if (game.phase === 'sheriff_signup' || game.phase === 'sheriff_direction') targets = [];
     action = { type: actionPhase, ...(turn ? { deadline: game.deadline + turn.offset } : {}), targets: targets.map(p => ({ id: p.id, name: p.name, seat: p.seat })) };
+    if (turn && submitted) action.selected = { ...game.actions[viewerId] };
     if (canPass) action = { type: 'pass', targets: [] };
     if (game.phase === 'sheriff_signup') action.choices = ['join', 'skip'];
     if (game.phase === 'sheriff_direction') action.choices = ['left', 'right'];
     if (actionPhase === 'witch') {
       action.choices = ['skip'];
-      if (canSave(game, viewerId)) action.choices.push('save');
-      if (game.potions.poison) action.choices.push('poison');
+      if (canSave(game, viewer)) action.choices.push('save');
+      if (privateInfo.potions.poison) action.choices.push('poison');
     }
   }
   return {

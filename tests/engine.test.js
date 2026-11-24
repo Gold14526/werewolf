@@ -11,12 +11,16 @@ const id = (g, role) => g.players.find(p => p.role === role).id;
 function play(g, role, targetId = null, choice) {
   return act(g, id(g, role), { type: role, targetId, choice }, g.deadline - 1);
 }
+function finishTurn(g, role, targetId = null, choice) {
+  play(g, role, targetId, choice);
+  advance(g, g.deadline);
+}
 function night(g, { guard = null, wolf = null, seer = null, witch = 'skip', poison = null } = {}) {
   const targets = { guard, wolf, seer, witch: witch === 'save' ? wolf : poison };
   while (g.phase === 'night') {
     for (const p of g.players) {
-      const { action } = viewGame(g, p.id);
-      if (!action) continue;
+      const { action, submitted } = viewGame(g, p.id);
+      if (!action || submitted) continue;
       act(g, p.id, { type: action.type, targetId: targets[action.type],
         ...(action.type === 'witch' ? { choice: witch } : {}) }, g.deadline - 1);
     }
@@ -44,13 +48,17 @@ test('standard deck has 12 roles and distinct assigned players', () => {
   assert.equal(g.players.length, 12);
   for (const [role, count] of Object.entries(STANDARD_CONFIG.roles)) assert.equal(g.players.filter(p => p.role === role).length, count);
   assert.equal(g.phase, 'night');
-  assert.equal(viewGame(g, id(g, 'wolf')).action.deadline, 76000);
-  assert.equal(viewGame(g, id(g, 'villager')).deadline, 106000);
+  assert.equal(viewGame(g, id(g, 'villager')).deadline, 166000);
+  assert.equal(viewGame(g, id(g, 'guard')).action.deadline, 31000);
+  assert.equal(viewGame(g, id(g, 'wolf')).action, null);
+  advance(g, g.deadline);
+  assert.equal(viewGame(g, id(g, 'wolf')).action.deadline, 106000);
 });
 
 test('rejects impossible and malformed configurations', () => {
-  for (const input of [null, [], { ...SIX, roles: { ...SIX.roles, wolf: -1 } }, { ...SIX, roles: { ...SIX.roles, witch: 2 } }, { ...SIX, roles: { wolf: 4, villager: 4 } }, { ...SIX, roles: { wolf: 1, villager: 5 } }, { ...SIX, roles: { ...SIX.roles, dragon: 1 } }, { ...SIX, daySeconds: 1 }]) assert.throws(() => validateConfig(input));
+  for (const input of [null, [], { ...SIX, roles: { ...SIX.roles, wolf: -1 } }, { ...SIX, roles: { ...SIX.roles, witch: 1.5 } }, { ...SIX, roles: { wolf: 4, villager: 4 } }, { ...SIX, roles: { wolf: 1, villager: 5 } }, { ...SIX, roles: { ...SIX.roles, dragon: 1 } }, { ...SIX, daySeconds: 1 }]) assert.throws(() => validateConfig(input));
   assert.equal(validateConfig({ roles: { wolf: 1, villager: 5 }, victory: 'all' }).roles.seer, 0);
+  assert.equal(validateConfig({ ...SIX, roles: { ...SIX.roles, witch: 2 } }).roles.witch, 2);
 });
 
 test('public view never discloses other good roles or internal night state', () => {
@@ -65,23 +73,27 @@ test('public view never discloses other good roles or internal night state', () 
   assert.throws(() => viewGame(g, 'outsider'));
 });
 
-test('enforces phase, actor, alive target and duplicate submission permissions', () => {
+test('enforces phase, actor and valid targets while permitting ballot changes until the cutoff', () => {
   const g = game(STANDARD_CONFIG);
   assert.throws(() => act(g, id(g, 'villager'), { type: 'guard', targetId: null }, 1001));
   assert.throws(() => play(g, 'guard', 'missing'));
   assert.throws(() => act(g, id(g, 'guard'), { type: 'vote', targetId: null }, 1001));
-  play(g, 'guard');
+  finishTurn(g, 'guard');
   const wolf = id(g, 'wolf');
-  act(g, wolf, { type: 'wolf', targetId: null }, 1001);
-  assert.throws(() => act(g, wolf, { type: 'wolf', targetId: null }, 1002));
+  act(g, wolf, { type: 'wolf', targetId: null }, g.deadline - 2);
+  const target = id(g, 'villager');
+  act(g, wolf, { type: 'wolf', targetId: target }, g.deadline - 1);
   assert.equal(viewGame(g, wolf).submitted, true);
+  assert.deepEqual(viewGame(g, wolf).privateInfo.wolfVotes, [{ playerId: wolf, targetId: target }]);
+  assert.throws(() => act(g, wolf, { type: 'wolf', targetId: null }, g.deadline));
+  assert.equal(g.night.victim, target);
 });
 
 test('seer result is private and identifies team rather than special role', () => {
   const g = game();
-  play(g, 'guard'); play(g, 'wolf');
-  play(g, 'seer', id(g, 'witch'));
-  advance(g, g.deadline);
+  finishTurn(g, 'guard');
+  finishTurn(g, 'wolf');
+  finishTurn(g, 'seer', id(g, 'witch'));
   const result = viewGame(g, id(g, 'seer')).privateInfo.results[0];
   assert.equal(result.team, 'good');
   assert.equal('role' in result, false);
@@ -90,7 +102,8 @@ test('seer result is private and identifies team rather than special role', () =
 
 test('night kill resolves only at dawn and side victory recognizes villagers', () => {
   const g = game();
-  play(g, 'guard'); play(g, 'wolf', id(g, 'villager'));
+  finishTurn(g, 'guard');
+  finishTurn(g, 'wolf', id(g, 'villager'));
   assert.equal(g.players.find(p => p.role === 'villager').alive, true);
   play(g, 'seer'); night(g);
   assert.equal(g.players.find(p => p.role === 'villager').alive, false);
@@ -118,13 +131,15 @@ test('guard and witch save on the same target still cause death', () => {
   const g = game();
   night(g, { guard: id(g, 'villager'), wolf: id(g, 'villager'), witch: 'save' });
   assert.equal(g.players.find(p => p.role === 'villager').alive, false);
-  assert.equal(g.potions.save, false);
+  assert.equal(viewGame(g, id(g, 'witch')).privateInfo.potions.save, false);
 });
 
 test('witch saves once, hides later wolf targets, and cannot spend both potions', () => {
   const g = game();
   const target = id(g, 'seer');
-  play(g, 'guard'); play(g, 'wolf', target); play(g, 'seer'); advance(g, g.deadline);
+  finishTurn(g, 'guard');
+  finishTurn(g, 'wolf', target);
+  finishTurn(g, 'seer');
   assert.equal(viewGame(g, id(g, 'witch')).privateInfo.nightVictim.id, target);
   assert.throws(() => play(g, 'witch', null, 'both'));
   assert.throws(() => play(g, 'witch', null, 'save'));
@@ -132,7 +147,9 @@ test('witch saves once, hides later wolf targets, and cannot spend both potions'
   advance(g, g.deadline);
   assert.equal(g.players.find(p => p.id === target).alive, true);
   vote(g, null);
-  play(g, 'guard'); play(g, 'wolf', target); play(g, 'seer'); advance(g, g.deadline);
+  finishTurn(g, 'guard');
+  finishTurn(g, 'wolf', target);
+  finishTurn(g, 'seer');
   const view = viewGame(g, id(g, 'witch'));
   assert.equal('nightVictim' in view.privateInfo, false);
   assert.equal(view.action.choices.includes('save'), false);
@@ -145,7 +162,9 @@ test('witch may self-save only during first night', () => {
   assert.equal(first.players.find(p => p.role === 'witch').alive, true);
   const second = game();
   night(second); vote(second, null);
-  play(second, 'guard'); play(second, 'wolf', id(second, 'witch')); play(second, 'seer'); advance(second, second.deadline);
+  finishTurn(second, 'guard');
+  finishTurn(second, 'wolf', id(second, 'witch'));
+  finishTurn(second, 'seer');
   assert.throws(() => play(second, 'witch', id(second, 'witch'), 'save'));
 });
 
@@ -156,7 +175,7 @@ test('poison ignores protection and prevents hunter shot', () => {
   assert.equal(g.players.find(p => p.id === hunter).alive, false);
   lastwords(g);
   assert.equal(g.phase, 'discussion');
-  assert.equal(g.potions.poison, false);
+  assert.equal(viewGame(g, id(g, 'witch')).privateInfo.potions.poison, false);
 });
 
 test('hunter killed at night can shoot and victory waits for that shot', () => {
@@ -197,10 +216,12 @@ test('equal daytime votes do not eliminate anyone', () => {
 
 test('tied wolves abstain from killing', () => {
   const g = game(STANDARD_CONFIG);
-  play(g, 'guard');
+  finishTurn(g, 'guard');
   const wolves = g.players.filter(p => p.role === 'wolf');
   for (const [i, p] of wolves.entries()) act(g, p.id, { type: 'wolf', targetId: g.players[4 + i % 2].id }, g.deadline - 1);
-  play(g, 'seer'); night(g);
+  advance(g, g.deadline);
+  assert.equal(g.night.victim, null);
+  night(g);
   assert.equal(g.players.filter(p => p.alive).length, 12);
 });
 
@@ -210,7 +231,7 @@ test('timeouts skip actions, preserve full next-phase timer and reject late subm
   advance(g, deadline - 1);
   assert.equal(viewGame(g, id(g, 'guard')).action.type, 'guard');
   assert.throws(() => act(g, id(g, 'guard'), { type: 'guard', targetId: null }, deadline));
-  assert.equal(viewGame(g, id(g, 'witch')).action.type, 'witch');
+  assert.equal(viewGame(g, id(g, 'wolf')).action.type, 'wolf');
   assert.equal(g.deadline, deadline + 30000);
   advance(g, deadline + 900000);
   assert.equal(g.phase, 'discussion');
@@ -235,7 +256,7 @@ test('view copies cannot mutate authoritative secrets or player state', () => {
   view.privateInfo.potions.save = false;
   assert.equal(g.players[0].alive, true);
   assert.equal(g.config.roles.wolf, 1);
-  assert.equal(g.potions.save, true);
+  assert.equal(viewGame(g, id(g, 'witch')).privateInfo.potions.save, true);
 });
 
 test('public speech is restricted to the current player and pass moves in seat order', () => {
@@ -310,7 +331,8 @@ test('self votes are rejected and PK limits speakers, voters and targets', () =>
 test('only wolves see wolf ballots and living wolves chat only during wolf phase', () => {
   const g = game(STANDARD_CONFIG);
   const wolves = g.players.filter(p => p.role === 'wolf');
-  play(g, 'guard');
+  assert.equal(canChat(g, wolves[0].id, 'wolf'), false);
+  finishTurn(g, 'guard');
   assert.equal(canChat(g, wolves[0].id, 'wolf'), true);
   assert.equal(canChat(g, id(g, 'villager'), 'wolf'), false);
   act(g, wolves[0].id, { type: 'wolf', targetId: id(g, 'villager') }, g.deadline - 1);
@@ -369,7 +391,7 @@ test('night stages use fixed deadlines and configured dead roles retain their st
   const deadline = g.deadline;
   advance(g, deadline - 1); assert.equal(g.phase, 'night');
   assert.equal(viewGame(g, id(g, 'guard')).actionable, false);
-  advance(g, deadline); assert.equal(viewGame(g, id(g, 'witch')).action.type, 'witch');
+  advance(g, deadline); assert.equal(viewGame(g, id(g, 'wolf')).action.type, 'wolf');
 });
 
 test('skill audit is entirely private until the finished replay', () => {
@@ -392,7 +414,8 @@ test('reserved object-key player IDs cannot corrupt actions or investigations', 
   const g = createGame(players, SIX, { now: 1000, random: () => 0.999 });
   act(g, '__proto__', { type: 'guard', targetId: 'villager-id' }, 1001);
   assert.equal(Object.hasOwn(g.actions, '__proto__'), true);
-  play(g, 'wolf'); play(g, 'seer', 'wolf-id');
   advance(g, g.deadline);
+  finishTurn(g, 'wolf');
+  finishTurn(g, 'seer', 'wolf-id');
   assert.equal(viewGame(g, 'constructor').privateInfo.results[0].team, 'wolf');
 });

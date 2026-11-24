@@ -196,6 +196,13 @@ test('Postgres function replacement preserves a running phase timer and normal r
   assert.equal(continuing.status, 200, continuing.data.error);
   assert.equal(continuing.data.room.game.phase, 'night');
   assert.equal(continuing.data.room.game.deadline, deadline, 'ordinary cold starts must not repeatedly extend a phase');
+  // Poll during the night so the database treats this as live play instead of downtime.
+  while (c.now + 30_000 < deadline) {
+    c.now += 30_000;
+    const night = await c.request('/api/room', { token: people[0].token, customStore: fresh });
+    assert.equal(night.data.room.game.phase, 'night');
+    assert.equal(night.data.room.game.deadline, deadline);
+  }
   c.now = deadline;
   const advanced = await c.request('/api/room', { token: people[0].token, customStore: fresh });
   assert.equal(advanced.status, 200, advanced.data.error);

@@ -333,7 +333,6 @@ body {
 .lg-discussion .card-header small { font-size: 11px; }
 .lg-discussion .card-body { padding: 14px 0 0; }
 .lg-discussion .chat-feed { height: 270px; padding: 12px 0; border-top: 1px solid #eee; font-size: 13px; line-height: 1.7; scrollbar-width: thin; }
-.lg-discussion .chat-feed:has(> p:only-child) { height: auto; min-height: 64px; }
 .lg-discussion .chat-feed.team { height: 210px; }
 .lg-discussion .chat-form { padding: 12px 0 0; border-top: 1px solid #eee; }
 .lg-discussion .chat-input { min-height: 88px; font-size: 13px; line-height: 1.6; resize: vertical; }
@@ -428,7 +427,6 @@ body {
   .lg-background .seats { gap: 8px; }
   .lg-background .seat-role .badge { max-width: 55px; }
   .lg-discussion .chat-feed { height: 230px; }
-  .lg-discussion .chat-feed:has(> p:only-child) { height: auto; }
 }
 @media (max-width: 640px) {
   .lg-card { padding: 18px; }

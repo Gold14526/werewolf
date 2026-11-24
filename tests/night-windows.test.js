@@ -9,53 +9,84 @@ const member = (g, role) => g.players.find(p => p.role === role);
 const view = (g, role) => viewGame(g, member(g, role).id);
 const choose = (g, role, targetId, at, choice) => act(g, member(g, role).id, { type: role, targetId, choice }, at);
 
-test('parallel night has independent fixed windows and a single public deadline', () => {
+test('night roles act in order with a single public dawn deadline', () => {
   const g = game({ otherNightSeconds: 40 });
   const villager = member(g, 'villager');
-  assert.equal(view(g, 'wolf').action.deadline, 76000);
-  assert.equal(view(g, 'guard').action.deadline, 41000);
-  assert.equal(view(g, 'seer').action.deadline, 41000);
-  assert.equal(view(g, 'witch').actionable, false);
-  choose(g, 'guard', villager.id, 1100);
-  choose(g, 'seer', member(g, 'wolf').id, 1100);
-  assert.deepEqual(view(g, 'wolf').privateInfo.wolfVotes, []);
-  for (const now of [1100, 41000, 75000, 76000, 115999]) {
-    advance(g, now);
+  const stages = [
+    ['guard', 1000, 41000], ['wolf', 41000, 116000],
+    ['seer', 116000, 156000], ['witch', 156000, 196000],
+  ];
+  for (const [role, start, end] of stages) {
+    advance(g, start);
+    for (const [candidate] of stages) assert.equal(view(g, candidate).actionable, candidate === role);
+    assert.equal(view(g, role).action.deadline, end);
+    assert.equal(canChat(g, member(g, 'wolf').id, 'wolf'), role === 'wolf');
+    if (role === 'witch') {
+      assert.equal(view(g, 'seer').privateInfo.results[0].team, 'wolf');
+      assert.equal(view(g, role).privateInfo.nightVictim.id, villager.id);
+      assert.throws(() => choose(g, role, null, start + 1, 'save'));
+      assert.throws(() => choose(g, role, member(g, 'guard').id, start + 1, 'save'));
+      choose(g, role, villager.id, start + 1, 'save');
+    } else {
+      const target = role === 'seer' ? member(g, 'wolf').id : villager.id;
+      choose(g, role, target, start + 1);
+    }
+    advance(g, end - 1);
     const v = view(g, 'villager');
     assert.equal(v.phase, 'night');
-    assert.equal(v.deadline, 116000);
+    assert.equal(v.deadline, 196000);
     assert.equal(v.action, null);
     assert.deepEqual(v.privateInfo, {});
-    if (now === 41000) {
-      assert.equal(view(g, 'seer').privateInfo.results[0].team, 'wolf');
-      assert.equal(g.night.guard, villager.id);
-      choose(g, 'wolf', villager.id, 41001);
-    }
   }
-  assert.equal(view(g, 'witch').privateInfo.nightVictim.id, villager.id);
-  assert.equal(canChat(g, member(g, 'wolf').id, 'wolf'), false);
-  assert.throws(() => choose(g, 'witch', null, 115999, 'save'));
-  assert.throws(() => choose(g, 'witch', member(g, 'guard').id, 115999, 'save'));
-  choose(g, 'witch', villager.id, 115999, 'save');
-  advance(g, 116000);
-  assert.equal(g.potions.save, false);
+  advance(g, 196000);
+  assert.equal(view(g, 'witch').privateInfo.potions.save, false);
   assert.equal(villager.alive, false, 'guard protection plus antidote still kills');
+});
+
+test('a persisted parallel night completes as scheduled, then starts the next night in order', () => {
+  const snapshot = game();
+  delete snapshot.night.sequential;
+  snapshot.night.windows = [
+    { role: 'guard', offset: 0 }, { role: 'seer', offset: 0 },
+    { role: 'wolf', offset: 45000 }, { role: 'witch', offset: 75000 },
+  ];
+  const victim = member(snapshot, 'villager').id;
+  choose(snapshot, 'wolf', victim, 5000);
+  choose(snapshot, 'seer', victim, 5000);
+  const g = JSON.parse(JSON.stringify(snapshot));
+  advance(g, 20000);
+  assert.equal(view(g, 'guard').actionable, true);
+  assert.equal(view(g, 'wolf').submitted, true);
+  assert.equal(view(g, 'seer').submitted, true);
+  advance(g, 31000);
+  assert.equal(view(g, 'seer').privateInfo.results[0].id, victim);
+  advance(g, 76000);
+  assert.equal(view(g, 'witch').privateInfo.nightVictim.id, victim);
+  choose(g, 'witch', victim, 76001, 'save');
+  advance(g, 106000);
+  while (g.currentSpeakerId) act(g, g.currentSpeakerId, { type: 'pass' }, 106001);
+  advance(g, g.deadline);
+  assert.equal(g.round, 2);
+  assert.equal(view(g, 'guard').actionable, true);
+  assert.equal(view(g, 'wolf').actionable, false);
+  assert.equal(view(g, 'seer').actionable, false);
 });
 
 test('tied or empty wolf votes show no victim and allow poison on any living seat', () => {
   for (const tie of [false, true]) {
     const g = game(), wolves = g.players.filter(p => p.role === 'wolf');
+    advance(g, 31000);
     if (tie) {
-      act(g, wolves[0].id, { type: 'wolf', targetId: member(g, 'seer').id }, 2000);
-      act(g, wolves[1].id, { type: 'wolf', targetId: member(g, 'guard').id }, 2000);
+      act(g, wolves[0].id, { type: 'wolf', targetId: member(g, 'seer').id }, 32000);
+      act(g, wolves[1].id, { type: 'wolf', targetId: member(g, 'guard').id }, 32000);
     }
-    advance(g, 76000);
+    advance(g, 136000);
     const witch = view(g, 'witch');
     assert.equal(witch.privateInfo.nightVictim, null);
     assert.deepEqual(witch.action.choices, ['skip', 'poison']);
     assert.deepEqual(new Set(witch.action.targets.map(p => p.id)), new Set(g.players.map(p => p.id)));
-    choose(g, 'witch', member(g, 'witch').id, 76001, 'poison');
-    advance(g, 106000);
+    choose(g, 'witch', member(g, 'witch').id, 136001, 'poison');
+    advance(g, 166000);
     assert.equal(member(g, 'witch').alive, false);
   }
 });
@@ -65,13 +96,13 @@ test('all three self-save policies apply to the first and later nights', () => {
   for (const policy of ['none', 'first', 'always']) for (const round of [1, 2]) {
     const g = game({ witchSelfSave: policy }); g.round = round;
     const witch = member(g, 'witch');
-    choose(g, 'wolf', witch.id, 1100);
-    advance(g, 76000);
+    choose(g, 'wolf', witch.id, 31001);
+    advance(g, 136000);
     const permitted = policy === 'always' || (policy === 'first' && round === 1);
     assert.equal(view(g, 'witch').action.choices.includes('save'), permitted);
-    if (permitted) choose(g, 'witch', witch.id, 77000, 'save');
-    else assert.throws(() => choose(g, 'witch', witch.id, 77000, 'save'));
-    advance(g, 106000);
+    if (permitted) choose(g, 'witch', witch.id, 137000, 'save');
+    else assert.throws(() => choose(g, 'witch', witch.id, 137000, 'save'));
+    advance(g, 166000);
     assert.equal(witch.alive, permitted);
   }
   assert.throws(() => validateConfig({ ...config, otherNightSeconds: 75 }));
@@ -107,7 +138,7 @@ test('old night upgrades in place using elapsed time, preserves submitted action
     advance(reloaded, publicEnd + 8000);
     assert.notEqual(reloaded.phase, 'night');
     if (role === 'witch') {
-      assert.equal(reloaded.potions.save, false);
+      assert.equal(view(reloaded, 'witch').privateInfo.potions.save, false);
       assert.equal(member(reloaded, 'villager').alive, true);
     }
   }
@@ -129,7 +160,7 @@ test('the other action duration covers non-speech daytime actions and migrates o
   const g = game({ otherNightSeconds: 40, sheriff: true });
   advance(g, view(g, 'villager').deadline);
   assert.equal(g.phase, 'sheriff_signup');
-  assert.equal(g.deadline, 156000);
+  assert.equal(g.deadline, 236000);
   const old = game();
   old.phase = 'vote'; old.deadline = 76000; delete old.config.otherNightSeconds;
   assert.equal(migrateNightConfig(old, 11000), true);

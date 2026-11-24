@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createApp } from '../server/index.mjs';
 import { handleApi } from '../worker/api.js';
 import { TestD1Database } from './d1-shim.js';
@@ -10,19 +12,24 @@ const config = {
 };
 const wolfRoles = new Set(['wolf', 'wolfKing', 'whiteWolfKing']);
 
-async function setup(t, backend) {
+async function setup(t, backend, { durable = false } = {}) {
   let now = 1_800_000_000_000;
   let origin = 'https://roles.example';
   let app, db, handler = handleApi;
-  if (backend === 'node') {
-    app = createApp({ databasePath: ':memory:', disableRateLimits: true, now: () => now });
-    await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
-    origin = `http://127.0.0.1:${app.server.address().port}`;
-    t.after(() => app.close());
-  } else {
-    db = new TestD1Database();
-    t.after(() => db.close());
+  const directory = durable ? await mkdtemp(join(process.cwd(), 'moonwolf-api-')) : null;
+  const databasePath = directory ? join(directory, 'game.sqlite') : ':memory:';
+  async function open() {
+    if (backend === 'node') {
+      app = createApp({ databasePath, disableRateLimits: true, now: () => now });
+      await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+      origin = `http://127.0.0.1:${app.server.address().port}`;
+    } else db = new TestD1Database(databasePath);
   }
+  async function close() { if (app) await app.close(); else db?.close(); }
+  t.after(async () => {
+    try { await close(); } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
+  });
+  await open();
   async function request(route, { token, body } = {}) {
     const input = new Request(origin + route, {
       method: body === undefined ? 'GET' : 'POST',
@@ -51,22 +58,25 @@ async function setup(t, backend) {
   return {
     request, session, editRoom, setNow(value) { now = value; },
     async reloadHandler() {
-      if (!app) handler = (await import('../worker/api.js?new-roles-function-instance')).handleApi;
+      if (durable) { await close(); await open(); }
+      if (backend === 'cloud') handler = (await import('../worker/api.js?new-roles-function-instance')).handleApi;
     },
   };
 }
 
 async function makeGame(c, overrides = {}) {
   const people = [];
-  for (let i = 0; i < 9; i++) people.push(await c.session(`新角色${i + 1}`));
-  const created = await c.request('/api/rooms', { token: people[0].token, body: { config: { ...config, ...overrides }, visibility: 'public', name: '特殊角色上警局' } });
+  const settings = { ...config, ...overrides };
+  const count = Object.values(settings.roles).reduce((sum, n) => sum + n, 0);
+  for (let i = 0; i < count; i++) people.push(await c.session(`新角色${i + 1}`));
+  const created = await c.request('/api/rooms', { token: people[0].token, body: { config: settings, visibility: 'public', name: '特殊角色房' } });
   assert.equal(created.status, 200, JSON.stringify(created.data));
   assert.match(created.data.room.code, /^\d{6}$/);
-  assert.equal(created.data.room.config.sheriff, true);
-  for (const role of ['wolfKing', 'whiteWolfKing', 'fool', 'knight']) assert.equal(created.data.room.config.roles[role], 1);
+  assert.equal(created.data.room.config.sheriff, settings.sheriff);
+  for (const [role, count] of Object.entries(settings.roles)) assert.equal(created.data.room.config.roles[role], count);
   const { code } = created.data.room;
   const listing = await c.request('/api/rooms', { token: people[1].token });
-  assert.equal(listing.data.rooms.find(room => room.code === code).config.sheriff, true);
+  assert.equal(listing.data.rooms.find(room => room.code === code).config.sheriff, settings.sheriff);
   for (const person of people.slice(1)) {
     assert.equal((await c.request('/api/join', { token: person.token, body: { code } })).status, 200);
     assert.equal((await c.request('/api/ready', { token: person.token, body: { ready: true } })).status, 200);
@@ -122,10 +132,13 @@ for (const backend of ['node', 'cloud']) {
       assert.equal(Object.hasOwn(game, 'night'), false);
       assert.equal(Object.hasOwn(game, 'actions'), false);
     }
-    assert.equal((await c.request('/api/action', { token: wolves[0].token, body: { type: 'wolf', targetId: target.player.id } })).status, 400);
+    const revised = await c.request('/api/action', { token: wolves[0].token, body: { type: 'wolf', targetId: null } });
+    assert.equal(revised.status, 200);
+    assert.equal(revised.data.room.game.privateInfo.wolfVotes.find(ballot => ballot.playerId === wolves[0].player.id).targetId, null);
     c.setNow(people[0].room.game.deadline);
     const morning = (await c.request('/api/room', { token: target.token })).data.room.game;
     assert.equal(morning.phase, 'sheriff_signup');
+    assert.equal((await c.request('/api/action', { token: wolves[0].token, body: { type: 'wolf', targetId: target.player.id } })).status, 400);
     assert.equal(morning.players.find(player => player.id === target.player.id).alive, true, 'first-night deaths stay hidden until the sheriff election finishes');
     const signedUp = await c.request('/api/action', { token: target.token, body: { type: 'sheriff_signup', choice: 'join' } });
     assert.equal(signedUp.status, 200);
@@ -213,11 +226,23 @@ for (const backend of ['node', 'cloud']) {
     const next = (await c.request('/api/rooms', { token: nextHost.token, body: { config } })).data.room.code;
     const guest = people.find(p => p.role === 'villager');
     const living = people.find(p => p.role === 'knight');
-    c.editRoom(code, room => { room.game.players.find(p => p.id === guest.player.id).alive = false; });
+    // Resolve an actual expulsion, so the public announcement and automatic
+    // gallery membership are checked together in both adapters.
+    c.editRoom(code, ({ game }) => {
+      game.phase = 'vote';
+      game.deadline = 1_800_000_030_000;
+    });
+    const ballot = await c.request('/api/action', { token: living.token, body: { type: 'vote', targetId: guest.player.id } });
+    assert.equal(ballot.status, 200, ballot.data.error);
+    c.setNow(ballot.data.room.game.deadline);
     const past = (await c.request('/api/room?code=' + code, { token: guest.token })).data.room;
     assert.equal(past.isSpectator, true);
     const firstSeat = past.players.find(p => p.id === guest.player.id).seat;
-    assert.equal((await c.request('/api/join', { token: outsider.token, body: { code } })).data.room.isSpectator, true);
+    assert.ok(past.game.log.some(event => event.text === firstSeat + ' 号玩家被放逐。'));
+    assert.equal(past.messages.some(m => m.text.includes('观战席')), false);
+    const entered = (await c.request('/api/join', { token: outsider.token, body: { code } })).data.room;
+    assert.equal(entered.isSpectator, true);
+    assert.equal(entered.messages.filter(m => m.text === '临时观众 加入了观战席').length, 1);
     for (const spectator of [guest, outsider]) {
       const joined = await c.request('/api/join', { token: spectator.token, body: { code: next } });
       assert.equal(joined.status, 200);
@@ -364,5 +389,76 @@ for (const backend of ['node', 'cloud']) {
     assert.equal(started.status, 200, started.data.error);
     checkTranscript(started.data.room);
     c.editRoom(code, checkTranscript);
+  });
+}
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} restores independent night revisions and results for duplicate roles`, async t => {
+    const c = await setup(t, backend, { durable: true });
+    const { people, code } = await makeGame(c, {
+      roles: { guard: 2, wolf: 2, seer: 2, witch: 2, villager: 2 },
+      sheriff: false, victory: 'all', nightSeconds: 60, otherNightSeconds: 30,
+    });
+    const ofRole = role => people.filter(p => p.role === role);
+    const guards = ofRole('guard'), wolves = ofRole('wolf'), seers = ofRole('seer');
+    const witches = ofRole('witch'), villagers = ofRole('villager');
+    for (const group of [guards, wolves, seers, witches, villagers]) assert.equal(group.length, 2);
+    async function read(person) {
+      const res = await c.request('/api/room?code=' + code, { token: person.token });
+      assert.equal(res.status, 200, res.data.error);
+      return res.data.room.game;
+    }
+    async function act(person, target, choice) {
+      const game = await read(person);
+      assert.equal(game.action.type, person.role);
+      const action = { type: person.role, targetId: target?.player.id ?? null, round: game.round, turnDeadline: game.action.deadline };
+      if (choice) action.choice = choice;
+      const res = await c.request('/api/action?code=' + code, { token: person.token, body: action });
+      assert.equal(res.status, 200, res.data.error);
+      assert.deepEqual(res.data.room.game.action.selected, { targetId: action.targetId, ...(choice ? { choice } : {}) });
+      return res.data.room.game;
+    }
+
+    await Promise.all([act(guards[0], villagers[0]), act(guards[1], witches[0])]);
+    const guard = await act(guards[0], seers[0]);
+    assert.equal((await read(guards[1])).action.selected.targetId, witches[0].player.id);
+    assert.equal((await read(villagers[0])).action, null);
+    c.setNow(guard.action.deadline);
+
+    await Promise.all([act(wolves[0], villagers[1]), act(wolves[1], villagers[0])]);
+    const wolf = await act(wolves[0], villagers[0]);
+    c.setNow(wolf.action.deadline);
+    await Promise.all([act(seers[0], wolves[0]), act(seers[1], wolves[1])]);
+    await act(seers[0], villagers[0]);
+    await c.reloadHandler();
+    const first = await read(seers[0]), second = await read(seers[1]);
+    assert.equal(first.action.selected.targetId, villagers[0].player.id);
+    assert.equal(second.action.selected.targetId, wolves[1].player.id);
+    c.setNow(first.action.deadline);
+
+    for (const witch of witches) assert.equal((await read(witch)).privateInfo.nightVictim.id, villagers[0].player.id);
+    const seerResult = async () => {
+      for (const [person, target, team] of [[seers[0], villagers[0], 'good'], [seers[1], wolves[1], 'wolf']]) {
+        const view = await read(person);
+        assert.deepEqual(view.privateInfo.results.map(r => [r.id, r.team]), [[target.player.id, team]]);
+        assert.equal(view.privateInfo.potions, undefined);
+      }
+    };
+    await seerResult();
+    await Promise.all([act(witches[0], villagers[0], 'poison'), act(witches[1], null, 'skip')]);
+    const [saving] = await Promise.all([act(witches[0], villagers[0], 'save'), act(witches[1], villagers[1], 'poison')]);
+    c.setNow(saving.action.deadline);
+    const dawn = await read(villagers[0]);
+    assert.notEqual(dawn.phase, 'night');
+    assert.equal(dawn.players.find(p => p.id === villagers[0].player.id).alive, true);
+    assert.deepEqual(dawn.players.filter(p => !p.alive).map(p => p.id), [villagers[1].player.id]);
+    assert.deepEqual(dawn.privateInfo, {});
+    await c.reloadHandler();
+    await seerResult();
+    for (const [witch, potions] of [[witches[0], { save: false, poison: true }], [witches[1], { save: true, poison: false }]]) {
+      const view = await read(witch);
+      assert.deepEqual(view.privateInfo.potions, potions);
+      assert.equal(view.privateInfo.results, undefined);
+    }
   });
 }

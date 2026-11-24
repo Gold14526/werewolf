@@ -233,7 +233,10 @@ test('Postgres reopens a pre-expansion snapshot without requiring sheriff or new
   for (const key of Object.keys(g)) if (!oldKeys.has(key)) delete g[key];
   g.phase = 'guard';
   g.deadline = START + g.config.nightSeconds * 1000;
-  delete g.night.windows;
+  g.night = { victim: null, guard: null, poison: null, saved: false };
+  g.round = 2;
+  g.previousGuard = rolePlayer(g, 'villager').id;
+  g.potions = { save: false, poison: true };
   for (const field of ['otherNightSeconds', 'witchSelfSave', 'shuffleSeats', 'sheriff']) delete g.config[field];
   for (const role of ['wolfKing', 'whiteWolfKing', 'fool', 'knight']) delete g.config.roles[role];
   for (const p of g.players) {
@@ -244,6 +247,8 @@ test('Postgres reopens a pre-expansion snapshot without requiring sheriff or new
   advance(recovered, store.now);
   assert.equal(recovered.phase, 'night');
   assert.equal(recovered.config.otherNightSeconds, 30);
+  const witch = rolePlayer(recovered, 'witch');
+  assert.deepEqual(viewGame(recovered, witch.id).privateInfo.potions, { save: false, poison: true });
   assert.equal(viewGame(recovered, rolePlayer(recovered, 'wolf').id).action.type, 'wolf');
   assert.equal(viewGame(recovered, rolePlayer(recovered, 'guard').id).actionable, false, 'elapsed guard time exceeds the new 30-second window');
   finishNight(recovered);
@@ -251,4 +256,29 @@ test('Postgres reopens a pre-expansion snapshot without requiring sheriff or new
   assert.equal(viewGame(recovered, recovered.players[0].id).sheriffId, null);
   finishDiscussion(recovered);
   assert.ok(recovered.players.every(p => viewGame(recovered, p.id).actionable));
+});
+
+test('Postgres reopens two witches’ revised decisions and debits each final potion once', async t => {
+  const store = await diskStore(t);
+  const g = game({ roles: { wolf: 1, villager: 3, witch: 2 }, victory: 'all' });
+  const wolf = rolePlayer(g, 'wolf');
+  const [first, second] = g.players.filter(p => p.role === 'witch');
+  const [attacked, poisoned] = g.players.filter(p => p.role === 'villager');
+  submit(g, wolf.id, { type: 'wolf', targetId: attacked.id });
+  advance(g, g.deadline);
+  submit(g, first.id, { type: 'witch', choice: 'save', targetId: attacked.id });
+  submit(g, first.id, { type: 'witch', choice: 'poison', targetId: poisoned.id });
+  submit(g, second.id, { type: 'witch', choice: 'save', targetId: attacked.id });
+  await store.save(g);
+  const recovered = await store.reopen();
+  assert.deepEqual(withoutDeadline(recovered), withoutDeadline(g));
+  assert.equal(viewGame(recovered, first.id).actionable, true);
+  assert.equal(viewGame(recovered, second.id).actionable, true);
+  assert.deepEqual(viewGame(recovered, first.id).privateInfo.potions, { save: true, poison: true });
+  advance(recovered, recovered.deadline);
+  assert.equal(recovered.players.find(p => p.id === attacked.id).alive, true);
+  assert.equal(recovered.players.find(p => p.id === poisoned.id).alive, false);
+  assert.deepEqual(viewGame(recovered, first.id).privateInfo.potions, { save: true, poison: false });
+  assert.deepEqual(viewGame(recovered, second.id).privateInfo.potions, { save: false, poison: true });
+  assert.equal(Object.hasOwn(viewGame(recovered, attacked.id).privateInfo, 'potions'), false);
 });

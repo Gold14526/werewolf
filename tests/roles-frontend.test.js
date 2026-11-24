@@ -37,7 +37,7 @@ async function frontend() {
   };
   const field = (key, props) => elements.set(key, { ...el(), ...props });
   const submit = id => callbacks.get('submit')({ preventDefault() {}, target: { id, dataset: {}, querySelector: () => null } });
-  return { app, elements, calls, click, field, submit };
+  return { app, elements, calls, click, field, submit,callbacks };
 }
 function gameView(overrides = {}) {
   return { config: { ...engine.STANDARD_CONFIG, sheriff: true }, phase: 'discussion', phaseLabel: '轮流发言', round: 1,
@@ -58,7 +58,7 @@ test('room creation submits selected new roles and the sheriff checkbox and rese
   for (const name of ['狼王', '白狼王', '愚者', '骑士']) assert.match(ui.elements.get('#modal-root').innerHTML, new RegExp(`增加${name}`));
   assert.match(ui.elements.get('#modal-root').innerHTML, /type="checkbox" id="sheriff-enabled"/);
   assert.match(ui.elements.get('#modal-root').innerHTML, /<option value="75" selected>75 秒<\/option>/);
-  for (const [role, delta] of [['wolf', -1], ['wolfKing', 1], ['villager', -1], ['fool', 1]]) await ui.click({ count: role, delta: String(delta) });
+  for (const [role, delta] of [['wolf', -1], ['wolfKing', 1], ['wolfKing', 1], ['villager', -1], ['villager', -1], ['fool', 1], ['fool', 1]]) await ui.click({ count: role, delta: String(delta) });
   ui.field('#other-night-seconds', { value: '40' }); ui.field('#witch-self-save', { value: 'none' });
   ui.field('#shuffle-seats', { checked: true }); ui.field('#sheriff-enabled', { checked: true });
   ui.field('#victory', { value: 'side' }); ui.field('#night-seconds', { value: '75' }); ui.field('#day-seconds', { value: '90' });
@@ -72,7 +72,7 @@ test('room creation submits selected new roles and the sheriff checkbox and rese
   assert.equal(posted.config.victory, 'side');
   assert.equal(posted.config.nightSeconds, 75);
   assert.equal(posted.config.roles.wolfKing, 1);
-  assert.equal(posted.config.roles.fool, 1);
+  assert.equal(posted.config.roles.fool, 2);
   assert.equal(Object.values(posted.config.roles).reduce((a, b) => a + b, 0), 12);
   await ui.click({ do: 'reset-config' });
   assert.equal(ui.elements.get('#sheriff-enabled').checked, false);
@@ -160,4 +160,78 @@ test('special wolves see the wolf channel, sheriff badges and revealed fool stat
     assert.doesNotMatch(nightHtml, /<script>/);
   }
   assert.match(ui.app.historyTable([{ code: '123456', winner: 'wolf', round: 1, endedAt: Date.now() }]), /狼人胜利/);
+});
+
+test('each good special role may be selected repeatedly while special wolves keep a single slot',async()=>{
+  const ui=await frontend();
+  ui.app.createModal();
+  const roles=ui.app.state.config.roles;
+  for(const role of ['guard','seer','witch','hunter','fool','knight']){
+    await ui.click({count:role,delta:'1'});await ui.click({count:role,delta:'1'});
+    assert.ok(roles[role]>=2,role);
+  }
+  for(const role of ['wolfKing','whiteWolfKing']){
+    await ui.click({count:role,delta:'1'});await ui.click({count:role,delta:'1'});
+    assert.equal(roles[role],1,role);
+  }
+});
+
+test('an editable guard choice is private, persists through polls, and needs confirmation to change',async()=>{
+  const ui=await frontend();
+  const game=gameView({phase:'night',phaseLabel:'夜间',myRole:'guard',actionable:true,submitted:true});
+  game.action={type:'guard',deadline:game.deadline-60000,targets:game.players,selected:{targetId:'target'}};
+  putInRoom(ui.app,game);
+  const background=ui.app.roomView();
+  assert.equal((background.match(/data-deadline="/g)||[]).length,1);
+  assert.doesNotMatch(background,/已确认：守护|守卫行动/);
+  await ui.click({do:'night-actions'});
+  let html=ui.app.roomView();
+  assert.equal((html.match(/data-deadline="/g)||[]).length,1);
+  assert.match(html,/守卫行动/);assert.match(html,/已确认：守护 2 号 目标玩家/);
+  const before=ui.calls.length;
+  await ui.click({target:'me'});ui.app.render();
+  assert.equal(ui.calls.length,before);
+  html=ui.app.roomView();
+  assert.match(html,/data-target="me" aria-pressed="true"/);assert.match(html,/已确认：守护 2 号/);
+  await ui.click({action:'confirm'});
+  assert.deepEqual(ui.calls.at(-1).body,{type:'guard',targetId:'me',round:1,turnDeadline:game.action.deadline});
+});
+
+test('Ctrl+Enter submits the permitted chat form once and leaves other editing and IME input alone', async () => {
+  const ui=await frontend();
+  const chatCalls=()=>ui.calls.filter(c=>c.path.startsWith('/api/chat'));
+  async function press(channel,value,overrides={},disabled=false){
+    let prevented=false,pending,submits=0;
+    const button={disabled,dataset:{},isConnected:true};
+    const form={dataset:{chat:channel},querySelector:key=>key==='[type="submit"]'?button:null,
+      requestSubmit(submitter){
+        assert.equal(submitter,button);submits++;
+        pending=ui.callbacks.get('submit')({preventDefault(){},target:form});
+      }};
+    const target={id:'draft-'+channel,value,form};
+    ui.callbacks.get('input')({target});
+    ui.callbacks.get('keydown')({key:'Enter',ctrlKey:true,target,preventDefault(){prevented=true;},...overrides});
+    await pending;
+    return {prevented,submits};
+  }
+  putInRoom(ui.app,gameView({canSpeak:true,currentSpeakerId:'me'}));
+  await ui.click({sidebarToggle:'discussion'});
+  assert.match(ui.app.roomView(),/Ctrl\+Enter 发送/);
+  assert.deepEqual(await press('public','  白天发言  '),{prevented:true,submits:1});
+  assert.deepEqual(chatCalls().at(-1).body,{channel:'public',text:'白天发言'});
+  putInRoom(ui.app,gameView({phase:'night',myRole:'wolf',canSpeak:false,canWolfChat:true}));
+  assert.deepEqual(await press('wolf','夜间讨论'),{prevented:true,submits:1});
+  assert.deepEqual(chatCalls().at(-1).body,{channel:'wolf',text:'夜间讨论'});
+  assert.deepEqual(await press('public','还没轮到我'),{prevented:true,submits:0});
+  assert.deepEqual(await press('wolf','空白',{ctrlKey:false}),{prevented:false,submits:0});
+  assert.deepEqual(await press('wolf','拼音',{isComposing:true}),{prevented:false,submits:0});
+  assert.deepEqual(await press('wolf','拼音',{keyCode:229}),{prevented:false,submits:0});
+  assert.deepEqual(await press('wolf','尚未解除按键',{repeat:true}),{prevented:true,submits:0});
+  assert.deepEqual(await press('wolf','   '),{prevented:true,submits:0});
+  assert.deepEqual(await press('wolf','禁用',{},true),{prevented:true,submits:0});
+  ui.app.state.busy=true;
+  assert.deepEqual(await press('wolf','请求中'),{prevented:true,submits:0});
+  ui.app.state.busy=false;
+  assert.deepEqual(await press('wolf','代码',{target:{id:'code-editor',value:'code'}}),{prevented:false,submits:0});
+  assert.equal(chatCalls().length,2);
 });

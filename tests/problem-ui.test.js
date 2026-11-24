@@ -269,8 +269,9 @@ test('提交评测 is inert even with a real vote selected and a live room', asy
 
 test('night action controls and wolf chat exist only in 提交文件; code area stays independent', async () => {
   const ui = await frontend();
-  ui.putInRoom(gameView({ phase: 'wolf', phaseLabel: '狼人行动', myRole: 'wolfKing', canWolfChat: true,
-    action: { type: 'wolf', targets: [{ id: 'target', name: '目标玩家', seat: 2 }] } }));
+  const deadline=Date.now()+60000;
+  ui.putInRoom(gameView({ phase:'night',phaseLabel:'夜间',myRole:'wolfKing',canWolfChat:true,deadline:deadline+90000,
+    action:{type:'wolf',deadline,targets:[{id:'target',name:'目标玩家',seat:2}]} }));
   assert.match(ui.html(), /data-do="night-actions"/);
   assert.doesNotMatch(ui.html(), /data-chat="wolf"|data-action="confirm"/);
   await ui.click({ do: 'night-actions' });
@@ -282,7 +283,7 @@ test('night action controls and wolf chat exist only in 提交文件; code area 
   await ui.click({ target: 'target' });
   assert.equal(actions(ui).length, 0);
   await ui.click({ action: 'confirm' });
-  assert.deepEqual(actions(ui).at(-1).body, { type: 'wolf', targetId: 'target' });
+  assert.deepEqual(actions(ui).at(-1).body, {type:'wolf',targetId:'target',round:1,turnDeadline:deadline});
   await ui.click({ submitTab: 'code' });
   assert.match(ui.html(), /id="code-editor"/);
   assert.doesNotMatch(ui.html(), /data-chat="wolf"|data-action="confirm"/);
@@ -358,7 +359,7 @@ test('closing the ad survives renders without making a request', async () => {
   assert.equal(ui.calls.length,before);
 });
 
-test('witch sees the actual victim in the save control while a poison target is independent', async () => {
+test('witch confirms the actual victim for antidote and can replace it with a poison or a pass before deadline', async () => {
   const ui=await frontend();
   const witch=gameView({phase:'night',phaseLabel:'夜间',myRole:'witch'});
   const victim=witch.players[1];
@@ -368,11 +369,31 @@ test('witch sees the actual victim in the save control while a poison target is 
   assert.equal((ui.html().match(/data-deadline="/g)||[]).length,1);
   assert.doesNotMatch(ui.html(),/今夜被刀|使用解药|用毒目标/);
   await ui.click({do:'night-actions'});
+  assert.equal((ui.html().match(/data-deadline="/g)||[]).length,1);
+  assert.match(ui.html(),new RegExp(`data-deadline="${witch.action.deadline}"`));
   assert.match(ui.html(),/对 2 号 目标玩家 使用解药/);
   await ui.click({target:'outside'});await ui.click({action:'save'});
-  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'target',choice:'save'});
-  await ui.click({target:'outside'});await ui.click({action:'poison'});
-  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'outside',choice:'poison'});
+  assert.equal(actions(ui).length,0);
+  await ui.click({target:'target'});await ui.click({action:'save'});
+  const turn={round:witch.round,turnDeadline:witch.action.deadline};
+  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'target',choice:'save',...turn});
+  witch.submitted=true;
+  witch.action.selected={targetId:'target',choice:'save'};
+  ui.putInRoom(witch);
+  assert.match(ui.html(),/已确认：对 2 号 目标玩家 使用解药/);
+  assert.match(ui.html(),/data-target="target" aria-pressed="true"/);
+  await ui.click({target:'outside'});
+  assert.equal(actions(ui).length,1);
+  await ui.click({action:'poison'});
+  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:'outside',choice:'poison',...turn});
+  witch.action.selected={targetId:'outside',choice:'poison'};
+  ui.putInRoom(witch);
+  assert.match(ui.html(),/已确认：对 4 号 非候选玩家 使用毒药/);
+  await ui.click({action:'skip'});
+  assert.deepEqual(actions(ui).at(-1).body,{type:'witch',targetId:null,choice:'skip',...turn});
+  witch.action.selected={targetId:null,choice:'skip'};
+  ui.putInRoom(witch);
+  assert.match(ui.html(),/已确认：放弃行动/);
   witch.action.choices=['skip','poison'];
   witch.privateInfo.nightVictim=null;
   ui.putInRoom(witch);
@@ -426,43 +447,6 @@ test('empty seats accept seat requests; spectators can navigate between games an
   assert.deepEqual(ui.calls.filter(c=>c.path==='/api/join').at(-1).body,{code:'456789'});
 });
 
-test('room updates retain the document scroll and independently follow the end of the chat log', async () => {
-  const ui = await frontend();
-  ui.putInRoom(gameView());
-  await ui.click({ sidebarToggle: 'discussion' });
-  const viewport = ui.window;
-  viewport.scrollX = 0;
-  viewport.scrollY = 720;
-  viewport.scrollTo = (x, y) => { viewport.scrollX = x; viewport.scrollY = y; };
-
-  const makeFeed = height => ({
-    id: 'feed-public', clientHeight: 200, scrollHeight: height, top: 0,
-    get scrollTop() { return this.top; },
-    set scrollTop(y) { this.top = Math.max(0, Math.min(y, this.scrollHeight - this.clientHeight)); },
-  });
-  let feed = makeFeed(800);
-  feed.scrollTop = 130;
-  ui.document.querySelectorAll = key => key === '.chat-feed' ? [feed] : [];
-  const root = ui.elements.get('#app');
-  let markup = root.innerHTML;
-  Object.defineProperty(root, 'innerHTML', {get: () => markup, set(value) {
-    markup = value;
-    viewport.scrollY = 0;
-    feed = makeFeed(feed.scrollHeight + 30);
-  }});
-  const room = json(ui.app.state.room);
-  for (let count = 1; count <= 2; count++) {
-    if (count === 2) feed.scrollTop = feed.scrollHeight;
-    room.messages.push({ name:'玩家', seat:2, text:'新发言 ' + count, at:Date.now() });
-    ui.setServerRoom(room);
-    await ui.app.refreshData();
-    assert.equal(viewport.scrollY, 720);
-    assert.equal(feed.scrollTop, count === 1 ? 130 : feed.scrollHeight - feed.clientHeight);
-  }
-  await ui.click({page:'rules'});
-  assert.equal(viewport.scrollY, 0);
-});
-
 test('public and wolf drafts remain scoped to their original room when switching games', async () => {
   const ui = await frontend();
   ui.putInRoom(gameView());
@@ -480,59 +464,85 @@ test('public and wolf drafts remain scoped to their original room when switching
   assert.equal(ui.app.state.wolfDraft, '');
 });
 
-test('a live update changes chat controls without detaching a composing textarea or its form', async () => {
-  const ui = await frontend();
-  ui.putInRoom(gameView());
-  await ui.click({sidebarToggle:'discussion'});
+// These nodes implement the same insertion and removal semantics as the DOM.
+// The browser fixture in tests/chat-scroll.browser.html also samples animation frames.
+function domElement(name, attrs = {}, children = []) {
+  const node = {nodeName:name, nodeType:1, id:attrs.id || '', childNodes:[], parentNode:null,
+    get attributes() { return Object.entries(attrs).map(([name,value]) => ({name,value})); },
+    getAttributeNames:() => Object.keys(attrs),
+    getAttribute:key => attrs[key] ?? null,
+    hasAttribute:key => key in attrs,
+    setAttribute(key,value) { attrs[key] = value; },
+    removeAttribute(key) { delete attrs[key]; },
+    get children() { return this.childNodes; },
+    get firstElementChild() { return this.childNodes[0] || null; },
+    get lastElementChild() { return this.childNodes.at(-1) || null; },
+    get firstChild() { return this.firstElementChild; },
+    get nextSibling() { const list = this.parentNode.childNodes;return list[list.indexOf(this)+1] || null; },
+    isEqualNode(other) { return this === other; },
+    remove() {
+      if (!this.parentNode) return;
+      const list = this.parentNode.childNodes;
+      list.splice(list.indexOf(this),1);
+      this.parentNode = null;
+    },
+    insertBefore(child, next) {
+      child.remove();
+      this.childNodes.splice(next ? this.childNodes.indexOf(next) : this.childNodes.length,0,child);
+      child.parentNode = this;
+    },
+    getBoundingClientRect() { return {top:0, bottom:18}; },
+  };
+  for (const child of children) node.insertBefore(child,null);
+  return node;
+}
 
-  // Model mounted nodes and the sibling operations used by the native DOM.
-  // IME state lives on the original textarea and cannot be copied to a new one.
-  function node(nodeName, id = '', children = []) {
-    const element = {nodeName, id, childNodes:children, attributes:[], getAttributeNames:() => [],
-      isEqualNode(other) { return this === other; },
-      remove() {
-        const peers = this.parentNode.childNodes;
-        peers.splice(peers.indexOf(this), 1);
-        this.parentNode = null;
-      },
-      before(...nodes) { this.insertSiblings(nodes, 0); },
-      after(...nodes) { this.insertSiblings(nodes, 1); },
-      insertSiblings(nodes, offset) {
-        const parent = this.parentNode;
-        for (const child of nodes) {
-          child.remove();
-          child.parentNode = parent;
-        }
-        parent.childNodes.splice(parent.childNodes.indexOf(this) + offset, 0, ...nodes);
-      },
-    };
-    for (const child of children) child.parentNode = element;
-    return element;
+test('a room poll appends to the mounted feed without interim scroll, detach, or refocus', async () => {
+  for (const composing of [false,true]) {
+    const ui = await frontend();
+    ui.putInRoom(gameView());
+    await ui.click({sidebarToggle:'discussion'});
+    const line = n => domElement('DIV',{'data-entry':'m:' + n});
+    const feed = domElement('DIV',{id:'feed-public'},[line(1),line(2)]);
+    const draft = domElement('TEXTAREA',{id:'draft-public'});
+    const form = domElement('FORM',{},[draft]);
+    const root = domElement('DIV',{id:'app'},[feed,form]);
+    const room = json(ui.app.state.room);
+    const pageScrolls = [], feedScrolls = [];
+    let top = 130, count = 2;
+    Object.defineProperties(feed,{
+      scrollHeight:{get:() => 500 + 25 * feed.childNodes.length},
+      clientHeight:{value:200},
+      scrollTop:{get:() => top, set(y) {feedScrolls.push(y);top=y;}},
+    });
+    ui.elements.set('#app',root);
+    ui.elements.set('#draft-public',draft);
+    ui.document.activeElement = composing ? draft : null;
+    draft.value = '输入法候选中';
+    draft.selectionStart = 1; draft.selectionEnd = 3;
+    ui.document.querySelectorAll = s => s === '.chat-feed' ? [feed] : [];
+    ui.window.scrollY = 720;
+    ui.window.scrollTo = (...args) => pageScrolls.push(args);
+    ui.document.createElement = () => ({content:domElement('template',{},[
+      domElement('DIV',{id:'feed-public'},Array.from({length:count},(_,i) => line(i+1))),
+      domElement('FORM',{},[domElement('TEXTAREA',{id:'draft-public'})]),
+    ])});
+    const liveLine = feed.firstChild;
+    for (const value of [3,4,4]) {
+      if (count === 3) top = feed.scrollHeight - feed.clientHeight;
+      count = value;
+      room.messages.push({name:'玩家',seat:2,text:'消息' + room.messages.length,at:Date.now()});
+      ui.setServerRoom(room);
+      await ui.app.refreshData();
+      assert.equal(feed.children.length, count);
+      assert.equal(feed.firstChild, liveLine);
+      assert.deepEqual(root.childNodes, [feed,form]);
+      assert.equal(form.firstChild,draft);
+      assert.equal(ui.document.activeElement,composing ? draft : null);
+      assert.equal(draft.value,'输入法候选中');
+      assert.deepEqual([draft.selectionStart,draft.selectionEnd],[1,3]);
+    }
+    assert.deepEqual(pageScrolls,[]);
+    assert.deepEqual(feedScrolls,[400], 'only a pinned feed that receives a new last message follows it');
   }
-  const draft = node('TEXTAREA','draft-public');
-  const form = node('FORM','',[draft, node('BUTTON')]);
-  const root = ui.elements.get('#app');
-  form.parentNode = root;
-  root.childNodes = [form];
-  draft.value = '正在输入拼音';
-  draft.selectionStart = 2;
-  draft.selectionEnd = 5;
-  ui.elements.set('#draft-public', draft);
-  ui.document.activeElement = draft;
-  const freshDraft = node('TEXTAREA','draft-public');
-  const updatedControls = node('BUTTON');
-  const newForm = node('FORM','',[freshDraft, updatedControls]);
-  const incomingFeed = node('DIV','feed-public');
-  const template = node('#document-fragment','',[incomingFeed, newForm]);
-  template.querySelector = () => freshDraft;
-  ui.document.createElement = type => { assert.equal(type, 'template'); return {content:template}; };
-  const room = json(ui.app.state.room);
-  room.messages.push({name:'新玩家',seat:2,text:'继续输入时收到的新消息',at:Date.now()});
-  ui.setServerRoom(room);
-  await ui.app.refreshData();
-  assert.deepEqual(root.childNodes, [incomingFeed, form]);
-  assert.deepEqual(form.childNodes, [draft, updatedControls]);
-  assert.equal(ui.document.activeElement, draft);
-  assert.equal(draft.value, '正在输入拼音');
-  assert.deepEqual([draft.selectionStart, draft.selectionEnd], [2, 5]);
 });

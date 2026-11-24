@@ -1,4 +1,4 @@
-import {STANDARD_CONFIG, ROLE_INFO, isWolfRole, validateConfig, createGame, viewGame, act, advance} from './engine.js';
+import {STANDARD_CONFIG, ROLE_INFO, isWolfRole, roleLimit, validateConfig, createGame, viewGame, act, advance} from './engine.js';
 import {PROBLEM_TITLE, PROBLEM_CONTENT_HTML} from './problem-content.js';
 
 const $ = selector => document.querySelector(selector);
@@ -34,8 +34,8 @@ function modal(title,body){state.modal=title;$('#modal-root').innerHTML=`<div cl
 function closeModal(){state.modal=null;state.skill=null;$('#modal-root').innerHTML='';}
 function rules(){return `<ol class="rules-list">
   <li><strong>身份：</strong>默认 12 人标准局，${roleTags(STANDARD_CONFIG)}。开局随机分配身份；狼人知道同伴，其他玩家只知道自己。</li>
-  <li><strong>天黑：</strong>守卫、预言家与狼队同时行动，女巫在狼队行动结束后用药。狼人可在队内频道讨论，选择袭击目标；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
-  <li><strong>女巫与守卫：</strong>女巫一瓶解药、一瓶毒药，每夜最多一瓶，标准局仅首夜被刀可自救，开房可调整；守卫不能连续守同一人。同守同救仍会死亡。</li>
+  <li><strong>天黑：</strong>守卫、狼人、预言家、女巫依次行动。同一身份有多人时，每人独立确认自己的行动，截止前可改选或放弃。狼人可在队内频道讨论，选择袭击目标；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
+  <li><strong>女巫与守卫：</strong>每名女巫各有一瓶解药和一瓶毒药，每晚最多用一瓶，标准局仅首夜被刀可自救，开房可调整；守卫不能连续守同一人。同守同救仍会死亡。</li>
   <li><strong>天亮：</strong>公布死亡玩家，不公开身份。首夜死者可发表遗言；随后存活玩家依次发言，只有当前玩家可以发送，可点击「结束发言」。未轮到时可先写草稿。轮到时连续 60 秒未键入会被判定为挂机，此后每次发言只有 2 秒，点击「回到游戏」可恢复。</li>
   <li><strong>投票：</strong>具有投票权的存活玩家同时投票，点击头像即可投给该玩家，截止前可随时改票或弃权，不能投自己；警长放逐票计 1.5 票。投票结束后公布票型；平票玩家再发言并重新投票，再次平票则无人出局。</li>
   <li><strong>猎人：</strong>被袭击或放逐后可开枪带走一人；被女巫毒杀或白狼王带走不能开枪。<strong>狼人自爆：</strong>普通狼人和狼王可在白天发言、投票或警上发言时自爆，立即出局并结束当天。</li>
@@ -99,12 +99,15 @@ function shell(content) {
 
 function historyTable(list,empty='暂无已结束的对局'){return `<div class="table-wrap"><table class="table"><thead><tr><th>对局</th><th>结果</th><th>天数</th><th>结束时间</th></tr></thead><tbody>${list.length?list.map(g=>`<tr><td><button class="link-button history-link" data-history="${escape(g.code)}">#${escape(g.code)}</button>${g.demo?' <small class="muted">试玩</small>':''}</td><td><span class="badge ${g.winner==='wolf'?'wolf':g.winner==='good'?'good':'villager'}">${resultLabel(g.winner)}</span></td><td>${escape(g.round)}</td><td>${formatTime(g.endedAt)}</td></tr>`).join(''):`<tr><td colspan="4" class="empty-row">${empty}</td></tr>`}</tbody></table></div>`;}
 const NIGHT_PHASES=['night','guard','wolf','seer','witch'];
+const nightLabels={guard:'守卫行动',wolf:'狼人行动',seer:'预言家行动',witch:'女巫行动'};
+const currentNightAction=g=>NIGHT_PHASES.includes(g?.phase)&&Object.hasOwn(nightLabels,g?.action?.type)?g.action:null;
 const isVoting = g => ['vote','sheriff_vote'].includes(g?.phase);
 const selfSaveLabels = {none:'不能自救',first:'仅第一晚被刀可以自救',always:'可以自救'};
 const CODE_LANGUAGES=[['cpp14','C++14'],['cpp17','C++17'],['cpp20','C++20'],['c','C'],['python3','Python 3'],['java17','Java 17'],['rust','Rust'],['javascript','JavaScript']];
 function syncActionKey(room){
-  const g=room?.game,key=g?`${g.round}:${g.phase}:${g.action?.type||''}:${g.currentSpeakerId||''}:${g.deadline}`:'';
-  if(state.actionKey!==key){state.actionKey=key;state.target=null;if(state.skill){const submitted=state.skill.submitting;closeModal();if(!submitted)toast('阶段已变化，请重新选择技能目标');}}
+  const g=room?.game,night=currentNightAction(g);
+  const key=g?JSON.stringify([room.code,g.round,g.phase,g.action?.type,g.currentSpeakerId,g.deadline,night?.deadline,night?.selected]):'';
+  if(state.actionKey!==key){state.actionKey=key;state.target=night?.selected?.targetId??null;if(state.skill){const submitted=state.skill.submitting;closeModal();if(!submitted)toast('阶段已变化，请重新选择技能目标');}}
 }
 function problemPage(room){
   syncActionKey(room);
@@ -203,7 +206,7 @@ function lobby(){return problemPage(null);}
 function lobbyBackground(){return `<div class="seats">${Array.from({length:12},(_,i)=>`<div class="seat empty"><span class="seat-number">${i+1}</span><div class="avatar">＋</div><div class="seat-name muted">等待加入</div></div>`).join('')}</div><div class="lg-game-toolbar">${membershipMenu()}<span class="small muted">默认 12 人标准局 · 6 位随机房号</span><button class="link-button" data-page="rules">玩法说明</button></div><div class="controls">${state.room?'<button class="btn primary" data-page="room">回到我的房间</button>':''}${!state.room||state.room.isSpectator?'<button class="btn primary" data-do="match">开始匹配</button>':''}<button class="btn secondary" data-do="create">自选配置开房</button><button class="btn secondary" data-do="join-modal">输入房号加入</button><button class="btn secondary" data-do="demo">本地试玩</button></div><p class="small muted">匹配满 12 人自动开局，自建房由房主在全员准备后开始。</p><details class="lg-public-rooms"><summary>公开房间 · ${state.rooms.length} 个</summary><div class="lg-game-toolbar"><button class="link-button" data-do="refresh">刷新房间</button></div><div class="table-wrap"><table class="table"><thead><tr><th>房号</th><th>房间名</th><th>人数</th><th></th></tr></thead><tbody>${state.rooms.length?state.rooms.map(r=>`<tr><td>${escape(r.code)}</td><td>${escape(r.name)}</td><td>${r.playerCount} / ${r.capacity}</td><td><button class="btn primary small" data-join="${escape(r.code)}">加入</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty-row">暂无等待中的公开房间</td></tr>'}</tbody></table></div></details><details class="lg-public-rooms"><summary>胜场榜</summary><div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>玩家</th><th>胜 / 局</th><th>胜率</th></tr></thead><tbody>${state.standings.length?state.standings.slice(0,20).map((p,i)=>`<tr><td>${i+1}</td><td>${escape(p.name)}</td><td>${p.wins} / ${p.games}</td><td>${(p.games?p.wins/p.games*100:0).toFixed(1)}%</td></tr>`).join(''):'<tr><td colspan="4" class="empty-row">完成第一局后生成战绩</td></tr>'}</tbody></table></div></details>`;}
 function roomView(){return problemPage(state.replay||state.room);}
 function availableTarget(g,id){
-  if(state.replay||!g?.actionable||(g.submitted&&!isVoting(g))||!g.action?.targets?.some(p=>p.id===id))return false;
+  if(state.replay||!g?.actionable||(g.submitted&&!isVoting(g)&&!currentNightAction(g))||!g.action?.targets?.some(p=>p.id===id))return false;
   if(isVoting(g)){
     const p=g.players.find(p=>p.id===id);
     return Boolean(p&&p.id!==state.player?.id&&p.alive!==false&&!p.foolRevealed);
@@ -239,8 +242,10 @@ function codeEditor(){return `<div class="lg-code-editor"><div class="lg-code-to
 function nightActions(room){
   const g=room?.game;
   if(!room)return `<div class="action-panel"><p>加入房间后，可在这里进行夜间行动。</p><button class="btn primary" data-do="join-modal">输入房号加入</button></div>`;
-  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished';
-  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${g?.deadline?`<strong class="timer" data-deadline="${g.deadline}"></strong>`:''}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&!room.isSpectator&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
+  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished',action=currentNightAction(g);
+  const deadline=action?.deadline??g?.deadline;
+  const phaseLabel=action?nightLabels[action.type]:g?.phaseLabel;
+  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(phaseLabel):'等待开始'}</strong>${deadline?`<strong class="timer" data-deadline="${deadline}"></strong>`:''}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&!room.isSpectator&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
 }
 function captureCodeEditor(){
   const editor=document.getElementById('code-editor');if(!editor)return;
@@ -262,6 +267,16 @@ function sheriffPanel(g){
   const help=transfer?'原警长可将警徽交给一名有投票权的存活玩家，或选择撕毁；超时视为撕毁。':election?'竞选结束后公布首夜死讯。上警玩家发言，未报名的警下玩家投票；超时未操作视为放弃。':holder?'警长选择发言方向，放逐票计 1.5 票，常规白天最后发言。':pending?'首夜行动结束后开始竞选，竞选后公布首夜死讯。':'警徽流失后不再重新竞选。';
   return `<div class="sheriff-panel"><strong>${title}</strong><p class="small">${help}${candidates.length&&election?`<br>候选人：${candidates.map(p=>`${p.seat} 号 ${escape(p.name)}`).join('、')}`:''}</p></div>`;
 }
+function confirmedNightChoice(g){
+  const selected=currentNightAction(g)?.selected;
+  if(!selected)return '<p>先选择目标，再确认行动。截止前可以修改。</p>';
+  const person=g.players.find(p=>p.id===selected.targetId);
+  const target=person?`${person.seat} 号 ${escape(person.name)}`:'';
+  const verb={wolf:'袭击',guard:'守护',seer:'查验'}[g.action.type];
+  const choice=selected.choice==='save'?'使用解药':selected.choice==='poison'?'使用毒药':null;
+  const description=target?(choice?`对 ${target} ${choice}`:`${verb} ${target}`):'放弃行动';
+  return `<p>已确认：${description}。截止前可以修改。</p>`;
+}
 function actionPanel(g){
   const speech=['discussion','lastwords','sheriff_speech'].includes(g.phase);
   if(!g.actionable)return `<div class="action-panel"><p>${g.submitted?(NIGHT_PHASES.includes(g.phase)?'已提交，等待本阶段倒计时结束。':'已提交，等待其他玩家完成行动。'):speech?'请等待轮到你发言。可以先在右侧输入草稿。':g.phase==='sheriff_vote'?'等待警下玩家投票。报名上警者即使退水也不能投票。':g.phase==='sheriff_transfer'?'等待原警长移交或撕毁警徽。':g.phase==='sheriff_direction'?'等待警长选择发言方向。':'等待本阶段结束，请留意倒计时。'}</p></div>`;
@@ -274,19 +289,23 @@ function actionPanel(g){
     const summary=g.submitted?(voted?`当前投给 ${voted.seat} 号 ${escape(voted.name)}。`:'当前已弃权。'):'你尚未投票。';
     return `<div class="action-panel"><strong>${escape(g.phaseLabel)}</strong><p>${summary} 点击头像即可投票或换票，截止前也可以改为弃权。</p><button class="btn secondary" data-action="abstain" aria-pressed="${Boolean(g.submitted&&!g.myVoteTargetId)}">弃权</button></div>`;
   }
-  const buttons=targets.map(p=>`<button class="target ${state.target===p.id?'selected':''}" data-target="${escape(p.id)}" aria-pressed="${state.target===p.id}">${p.seat} 号 ${escape(p.name)}</button>`).join('');
-  const time=action?.deadline?`<span>本次行动剩余 <strong class="timer" data-deadline="${action.deadline}"></strong></span>`:'';
-  if(action?.type==='witch'){
-    const victim=g.privateInfo?.nightVictim;
-    const victimLabel=victim?`${victim.seat} 号 ${escape(victim.name)}`:'';
-    return `<div class="action-panel"><strong>女巫行动</strong> ${time}
-      ${victim!==undefined?`<p>${victim?`今夜被刀：${victimLabel}`:'今夜无人被刀'}</p>`:''}
-      ${victim&&action.choices.includes('save')?`<button class="btn primary" data-action="save">对 ${victimLabel} 使用解药</button>`:''}
-      ${action.choices.includes('poison')?`<p>选择用毒目标</p><div class="targets">${buttons}</div><button class="btn danger" data-action="poison" ${!availableTarget(g,state.target)?'disabled':''}>对所选玩家用毒</button>`:''}
-      <button class="btn secondary" data-action="skip">放弃行动</button></div>`;
-  }
-  const label={wolf:'狼队行动',seer:'预言家查验',guard:'守卫守护'}[action?.type]||g.phaseLabel;
-  return `<div class="action-panel"><strong>${escape(label)} · ${transfer?'移交或撕毁警徽':'选择目标'}</strong> ${time}${transfer?'<p>选择一位存活玩家接任警长，或撕毁警徽。</p>':''}<div class="targets">${buttons}</div><div class="controls"><button class="btn primary" data-action="confirm" ${!availableTarget(g,state.target)?'disabled':''}>${transfer?'移交给所选玩家':'确认选择'}</button><button class="btn secondary" data-action="skip">${transfer?'撕毁警徽':'放弃行动'}</button></div></div>`;
+  const night=currentNightAction(g),witch=night?.type==='witch',victim=g.privateInfo?.nightVictim;
+  const choices=action?.choices||[];
+  const hasAntidote=witch&&choices.includes('save')&&victim;
+  const canPoison=witch&&choices.includes('poison');
+  const visibleTargets=witch&&!canPoison?targets.filter(p=>hasAntidote&&p.id===victim.id):targets;
+  const buttons=visibleTargets.map(p=>`<button type="button" class="target ${state.target===p.id?'selected':''}" data-target="${escape(p.id)}" aria-pressed="${state.target===p.id}">${p.seat} 号 ${escape(p.name)}</button>`).join('');
+  const header=transfer?'移交或撕毁警徽':'选择目标';
+  return `<div class="action-panel"><strong>${night?header:`${escape(g.phaseLabel)} · ${header}`}</strong>
+    ${night?confirmedNightChoice(g):''}
+    ${transfer?'<p>选择一位存活玩家接任警长，或撕毁警徽。</p>':''}
+    ${witch&&victim!==undefined?`<p>${victim?`今夜被刀：${victim.seat} 号 ${escape(victim.name)}`:'今夜无人被刀'}</p>`:''}
+    ${buttons?`<div class="targets">${buttons}</div>`:''}
+    <div class="controls">${witch?
+      `${hasAntidote?`<button class="btn primary" data-action="save" ${state.target!==victim.id?'disabled':''}>对 ${victim.seat} 号 ${escape(victim.name)} 使用解药</button>`:''}
+       ${canPoison?`<button class="btn danger" data-action="poison" ${!availableTarget(g,state.target)?'disabled':''}>对所选玩家用毒</button>`:''}`:
+      `<button class="btn primary" data-action="confirm" ${!availableTarget(g,state.target)?'disabled':''}>${transfer?'移交给所选玩家':'确认选择'}</button>`}
+      <button class="btn secondary" data-action="skip">${transfer?'撕毁警徽':'放弃行动'}</button></div></div>`;
 }
 function skillModal(type){
   const g=state.room?.game;
@@ -309,58 +328,75 @@ async function confirmSkill(){
   if(skill.targetId===undefined||(skill.targetId!==null&&!targets.some(p=>p.id===skill.targetId)))throw new Error('请重新选择有效目标');
   skill.submitting=true;try{await submitAction({type:skill.type,targetId:skill.targetId});closeModal();}catch(error){if(state.skill)state.skill.submitting=false;throw error;}
 }
+function canSendChat(room,channel){
+  if(!room||state.replay)return false;
+  const game=room.game;
+  if(channel==='wolf')return Boolean(game?.canWolfChat);
+  return channel==='public'&&Boolean(game?.canSpeak||(!room.isSpectator&&(!game||game.phase==='finished')));
+}
 function chatPanel(room,channel){
-  const g=room.game, isWolf=channel==='wolf', allowed=!state.replay&&(isWolf?Boolean(g?.canWolfChat):Boolean(g?.canSpeak||(!room.isSpectator&&(!g||g.phase==='finished'))));
+  const g=room.game,isWolf=channel==='wolf',allowed=canSendChat(room,channel);
   let entries=(room.messages||[]).filter(m=>(m.channel||'public')===channel).map(m=>{
     const at=m.at||m.createdAt||0;
-    if(m.system)return {at,html:`<div class="system-message">${escape(m.text)}</div>`};
+    const entry = escape("m:" + (m.id || [at, m.playerId || m.name, m.text].join(":")));
+    if(m.system)return {at,html:`<div class="system-message" data-entry="${entry}">${escape(m.text)}</div>`};
     const seat=m.seat;
-    return {at,html:`<div class="chat-message ${isWolf?'wolf-message':''}"><strong>${seat?`${escape(seat)} 号 `:''}${escape(m.name||m.playerName||'玩家')}</strong> ${escape(m.text)}</div>`};
+    return {at,html:`<div class="chat-message ${isWolf?'wolf-message':''}" data-entry="${entry}"><strong>${seat?`${escape(seat)} 号 `:''}${escape(m.name||m.playerName||'玩家')}</strong> ${escape(m.text)}</div>`};
   });
-  if(!isWolf)entries=entries.concat((g?.log||[]).map(l=>({at:l.at,html:`<div class="system-message">${escape(l.text)}</div>`}))).sort((a,b)=>a.at-b.at);
-  const body = `<div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${!state.replay&&(!room.isSpectator||allowed)?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea>${!isWolf&&g?.inactivityDeadline?`<small id="afk-warning" class="form-error" data-inactivity="${g.inactivityDeadline}" hidden></small>`:''}<div class="chat-actions"><small class="muted">${allowed?'可以发言':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}`;
+  if(!isWolf)entries=entries.concat((g?.log||[]).map(l=>({at:l.at,html:`<div class="system-message" data-entry="g:${escape(l.seq ?? [l.at, l.text].join(':'))}">${escape(l.text)}</div>`}))).sort((a,b)=>a.at-b.at);
+  const body = `<div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${!state.replay&&(!room.isSpectator||allowed)?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea>${!isWolf&&g?.inactivityDeadline?`<small id="afk-warning" class="form-error" data-inactivity="${g.inactivityDeadline}" hidden></small>`:''}<div class="chat-actions"><small class="muted">${allowed?'Ctrl+Enter 发送':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}`;
   if (!isWolf) return body;
   return `<section class="card chat-card"><div class="card-header"><strong>狼人队内频道</strong><small class="muted">${g?.phase === 'finished' ? '对局已结束 · 记录公开' : '仅狼人夜间可见'}</small></div>${body}</section>`;
 }
-// Keep the native textarea and its ancestors mounted while the player writes.
-// Removing a focused textarea cancels an IME composition and can scroll a mobile
-// browser to the top as the on-screen keyboard closes and reopens.
-function renderAroundEditor(root, html, editor) {
-  const template = document.createElement('template');
-  template.innerHTML = html;
-  let current = editor;
-  let next = template.content.querySelector('#' + editor.id);
-  const path = [];
-  while (current && current !== root && next && next !== template.content) {
-    if (current.nodeName !== next.nodeName || current.id !== next.id) return false;
-    path.push([current, next]);
-    current = current.parentNode;
-    next = next.parentNode;
-  }
-  if (current !== root || next !== template.content) return false;
+// Polls patch the mounted page. A chat feed, its messages and its form retain
+// their native scroll, focus and composition state as new messages arrive.
+function childKey(node) {
+  if (node.nodeType !== 1) return node.nodeName;
+  const key = node.id || node.getAttribute('data-entry') || node.getAttribute('data-do') ||
+    node.getAttribute('class')?.split(/\s+/)[0] || '';
+  return node.nodeName + ':' + key;
+}
 
-  for (const [live, fresh] of path) {
-    for (const name of live.getAttributeNames()) {
-      if (!fresh.hasAttribute(name) && !(live === editor && name === 'style')) live.removeAttribute(name);
-    }
-    for (const {name, value} of fresh.attributes) {
-      if (live.getAttribute(name) !== value) live.setAttribute(name, value);
-    }
-
-    // A poll may change either side of the field, including controls within
-    // its form. Replace those siblings without ever detaching the field.
-    const oldNodes = [...live.parentNode.childNodes];
-    const newNodes = [...fresh.parentNode.childNodes];
-    const oldIndex = oldNodes.indexOf(live), newIndex = newNodes.indexOf(fresh);
-    const update = (old, incoming, insert) => {
-      if (old.length === incoming.length && old.every((node, i) => node.isEqualNode(incoming[i]))) return;
-      old.forEach(node => node.remove());
-      live[insert](...incoming);
-    };
-    update(oldNodes.slice(0, oldIndex), newNodes.slice(0, newIndex), 'before');
-    update(oldNodes.slice(oldIndex + 1), newNodes.slice(newIndex + 1), 'after');
+function syncChildren(parent, incoming) {
+  const old = new Map();
+  for (const child of parent.childNodes) {
+    const key = childKey(child);
+    if (!old.has(key)) old.set(key, []);
+    old.get(key).push(child);
   }
-  return true;
+  const pairs = Array.from(incoming.childNodes, fresh => [old.get(childKey(fresh))?.shift(), fresh]);
+  for (const unused of old.values()) for (const node of unused) node.remove();
+  let cursor = parent.firstChild;
+  for (const [live, fresh] of pairs) {
+    if (!live) { parent.insertBefore(fresh, cursor); continue; }
+    if (live !== cursor) parent.insertBefore(live, cursor);
+    if (!live.isEqualNode(fresh)) syncNode(live, fresh);
+    cursor = live.nextSibling;
+  }
+}
+
+function syncNode(live, fresh) {
+  if (live.nodeType !== 1) { live.nodeValue = fresh.nodeValue; return; }
+  for (const name of live.getAttributeNames()) {
+    // A resized textarea and the code editor's gutter use native inline styles.
+    if (!fresh.hasAttribute(name) && !(live.nodeName === 'TEXTAREA' && name === 'style')) live.removeAttribute(name);
+  }
+  for (const {name, value} of fresh.attributes) {
+    if (live.getAttribute(name) !== value) live.setAttribute(name, value);
+  }
+  // Drafts are edited natively. Rewriting a textarea's contents during a poll
+  // can discard an IME candidate or reset its cursor even if the node survives.
+  if (live.nodeName === 'TEXTAREA' || live.hasAttribute('data-deadline')) return;
+  syncChildren(live, fresh);
+}
+
+function firstVisibleMessage(feed) {
+  const top = feed.getBoundingClientRect().top;
+  for (const row of feed.children) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > top) return {row, offset:rect.top - top};
+  }
+  return null;
 }
 
 const roomDrafts = new Map();
@@ -388,15 +424,20 @@ function render(){
   }
   const root = $('#app');
   const focused = sameView ? document.activeElement : null;
-  const editing = ['draft-public', 'draft-wolf', 'code-editor'].includes(focused?.id);
-  const bounds = editing && focused.getBoundingClientRect?.();
-  const anchorTop = bounds && bounds.bottom > 0 && bounds.top < window.innerHeight ? bounds.top : null;
-  const oldX = window.scrollX, oldY = window.scrollY;
+  const previousEditor = document.getElementById('code-editor');
   const feeds = new Map();
   if (sameView) document.querySelectorAll('.chat-feed').forEach(feed => {
-    feeds.set(feed.id, {top:feed.scrollTop, atBottom:feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 2});
+    const pinned = feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 2;
+    feeds.set(feed, {pinned, first:feed.firstElementChild, last:feed.lastElementChild,
+      anchor:!pinned && feed.firstElementChild ? firstVisibleMessage(feed) : null});
   });
-  if (!(editing && focused.parentNode && renderAroundEditor(root, html, focused))) root.innerHTML = html;
+  if (sameView && root.firstChild) {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    syncChildren(root, template.content);
+  } else {
+    root.innerHTML = html;
+  }
   updateClock();
   const field = focused?.id && document.getElementById(focused.id);
   if (field && field !== focused) {
@@ -409,22 +450,26 @@ function render(){
     }
   }
   const editor = document.getElementById('code-editor');
-  if (editor && editor !== focused) {
+  if (editor && editor !== previousEditor) {
     const position = state.codeSelection;
     editor.setSelectionRange(position.start, position.end);
     editor.scrollTop = position.top;
     editor.scrollLeft = position.left;
+    syncCodeGutter(editor);
   }
-  if (editor) syncCodeGutter(editor);
   document.querySelectorAll('.chat-feed').forEach(feed => {
-    const old = feeds.get(feed.id);
-    feed.scrollTop = !old || old.atBottom ? feed.scrollHeight : old.top;
+    const old = feeds.get(feed);
+    if (!old || (old.pinned && old.last !== feed.lastElementChild)) {
+      const bottom = feed.scrollHeight - feed.clientHeight;
+      if (bottom - feed.scrollTop > 1) feed.scrollTop = bottom;
+    } else if (old.first !== feed.firstElementChild && old.anchor?.row.parentNode === feed) {
+      // The server trimmed old history. Keep the same line in view even in
+      // browsers without scroll anchoring; never take a reader back to the end.
+      const delta = old.anchor.row.getBoundingClientRect().top - feed.getBoundingClientRect().top - old.anchor.offset;
+      if (Math.abs(delta) > 1) feed.scrollTop += delta;
+    }
   });
-  if (renderedView !== null) {
-    const x = sameView ? oldX : 0;
-    const y = anchorTop !== null && field ? window.scrollY + field.getBoundingClientRect().top - anchorTop : sameView ? oldY : 0;
-    if (window.scrollX !== x || window.scrollY !== y) window.scrollTo?.(x, y);
-  }
+  if (!sameView && renderedView !== null) window.scrollTo?.(0, 0);
   renderedView = view;
   renderedMarkup = html;
 }
@@ -611,7 +656,7 @@ async function mutation(path,data={}){
 function settingsModal(){modal('联机设置',`<p class="muted">填写游戏服务器的完整地址。所有玩家使用同一服务器，即可共享匹配队列与房间。</p><form id="settings-form"><label class="field"><span>服务器地址</span><input id="api-base" class="input" type="url" value="${escape(state.apiBase)}" placeholder="https://your-server.example.com"><small class="muted">留空使用网站的默认服务器。</small></label><p class="form-error" id="settings-error"></p><button class="btn primary" type="submit">保存并连接</button></form>`);}
 function profileModal(){modal('设置玩家昵称',`<form id="profile-form"><label class="field"><span>昵称（1–16 字）</span><input class="input" id="player-name" value="${escape(state.name)}" maxlength="16" required></label><p class="small muted">同一浏览器标签页会保留你的座位；游戏进行中不能修改昵称。</p><p class="form-error" id="profile-error"></p><button class="btn primary" type="submit">保存昵称</button></form>`);}
 function joinModal(code=state.pendingInvite||''){modal(code?'加入好友房间':'输入房号加入',`<form id="join-form"><label class="field"><span>6 位随机房号</span><input class="input room-code-input" id="join-code" name="code" value="${escape(code)}" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="请输入 6 位数字" required></label><p class="small muted">你将以「${escape(state.name)}」加入。可在页面右上角修改昵称。</p><p class="form-error" id="join-error"></p><button class="btn primary full" type="submit">加入房间</button></form>`);}
-function createModal(){state.config=copy(STANDARD_CONFIG);modal('自选配置开房',`<form id="create-form"><label class="field"><span>房间名称</span><input id="room-name" class="input" value="${escape(state.name)}的房间" maxlength="30" required></label><div class="config-total"><strong>角色配置 · 共 <span id="total-count">12</span> 人</strong><button type="button" class="link-button" data-do="reset-config">恢复标准局</button></div><div class="role-counters">${roleKeys.map(r=>`<div class="counter-item"><span title="${escape(ROLE_INFO[r].description)}">${badge(r)}</span><button type="button" data-count="${r}" data-delta="-1" aria-label="减少${ROLE_INFO[r].name}">−</button><output id="count-${r}">${state.config.roles[r]??0}</output><button type="button" data-count="${r}" data-delta="1" aria-label="增加${ROLE_INFO[r].name}">＋</button></div>`).join('')}</div><details class="role-help"><summary>查看角色技能</summary><dl>${roleKeys.map(r=>`<dt>${badge(r)}</dt><dd>${escape(ROLE_INFO[r].description)}</dd>`).join('')}</dl></details><label class="check-row"><input type="checkbox" id="shuffle-seats"><span>开局随机重排座位</span></label><label class="check-row sheriff-option"><input type="checkbox" id="sheriff-enabled"><span><strong>开启上警</strong><small>首日竞选警长，可选择发言方向并最后发言、放逐票计 1.5 票，可移交警徽。</small></span></label><div class="form-row"><label class="field"><span>房间类型</span><select id="visibility" class="input"><option value="private">私密房间 · 凭房号加入</option><option value="public">公开房间 · 展示在大厅</option></select></label><label class="field"><span>胜利条件</span><select id="victory" class="input"><option value="side">屠边（标准）</option><option value="all">屠城</option></select></label></div><div class="form-row"><label class="field"><span>狼队行动时间</span><select id="night-seconds" class="input"><option value="60">60 秒</option><option value="75" selected>75 秒</option><option value="90">90 秒</option></select></label><label class="field"><span>其它行动时间</span><select id="other-night-seconds" class="input"><option value="30" selected>30 秒</option><option value="40">40 秒</option><option value="50">50 秒</option></select></label></div><div class="form-row"><label class="field"><span>女巫自救</span><select id="witch-self-save" class="input">${Object.entries(selfSaveLabels).map(([value,label])=>`<option value="${value}" ${value==='first'?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>每人发言时限</span><select id="day-seconds" class="input"><option value="60">60 秒</option><option value="90" selected>90 秒</option><option value="120">120 秒</option></select></label></div><p class="small muted">6–18 人，狼王、白狼王及每种神职各最多 1 人；狼阵营总人数至少 1 人且少于半数。创建后自动生成不重复的 6 位房号。</p><p class="form-error" id="create-error"></p><button class="btn primary full" type="submit">创建房间</button></form>`);}
+function createModal(){state.config=copy(STANDARD_CONFIG);modal('自选配置开房',`<form id="create-form"><label class="field"><span>房间名称</span><input id="room-name" class="input" value="${escape(state.name)}的房间" maxlength="30" required></label><div class="config-total"><strong>角色配置 · 共 <span id="total-count">12</span> 人</strong><button type="button" class="link-button" data-do="reset-config">恢复标准局</button></div><div class="role-counters">${roleKeys.map(r=>`<div class="counter-item"><span title="${escape(ROLE_INFO[r].description)}">${badge(r)}</span><button type="button" data-count="${r}" data-delta="-1" aria-label="减少${ROLE_INFO[r].name}">−</button><output id="count-${r}">${state.config.roles[r]??0}</output><button type="button" data-count="${r}" data-delta="1" aria-label="增加${ROLE_INFO[r].name}">＋</button></div>`).join('')}</div><details class="role-help"><summary>查看角色技能</summary><dl>${roleKeys.map(r=>`<dt>${badge(r)}</dt><dd>${escape(ROLE_INFO[r].description)}</dd>`).join('')}</dl></details><label class="check-row"><input type="checkbox" id="shuffle-seats"><span>开局随机重排座位</span></label><label class="check-row sheriff-option"><input type="checkbox" id="sheriff-enabled"><span><strong>开启上警</strong><small>首日竞选警长，可选择发言方向并最后发言、放逐票计 1.5 票，可移交警徽。</small></span></label><div class="form-row"><label class="field"><span>房间类型</span><select id="visibility" class="input"><option value="private">私密房间 · 凭房号加入</option><option value="public">公开房间 · 展示在大厅</option></select></label><label class="field"><span>胜利条件</span><select id="victory" class="input"><option value="side">屠边（标准）</option><option value="all">屠城</option></select></label></div><div class="form-row"><label class="field"><span>狼队行动时间</span><select id="night-seconds" class="input"><option value="60">60 秒</option><option value="75" selected>75 秒</option><option value="90">90 秒</option></select></label><label class="field"><span>其它行动时间</span><select id="other-night-seconds" class="input"><option value="30" selected>30 秒</option><option value="40">40 秒</option><option value="50">50 秒</option></select></label></div><div class="form-row"><label class="field"><span>女巫自救</span><select id="witch-self-save" class="input">${Object.entries(selfSaveLabels).map(([value,label])=>`<option value="${value}" ${value==='first'?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>每人发言时限</span><select id="day-seconds" class="input"><option value="60">60 秒</option><option value="90" selected>90 秒</option><option value="120">120 秒</option></select></label></div><p class="small muted">6–18 人，狼王、白狼王各最多 1 人，好人神职可重复选择；狼阵营总人数至少 1 人且少于半数。创建后自动生成不重复的 6 位房号。</p><p class="form-error" id="create-error"></p><button class="btn primary full" type="submit">创建房间</button></form>`);}
 function updateCounts(){roleKeys.forEach(r=>{const el=$('#count-'+r);if(el)el.textContent=state.config.roles[r]??0;});if($('#total-count'))$('#total-count').textContent=size(state.config);}
 
 function startDemo(){
@@ -644,7 +689,7 @@ function demoTick(){
   }
   if(JSON.stringify(g)!==before)syncDemo();
 }
-async function submitAction(payload){if(state.demo){if(payload.turnDeadline!=null)payload.turnDeadline+=demoTimeOffset;act(state.demoGame,'local-player',payload,demoNow());state.target=null;syncDemo();}else{await mutation('/api/action',payload);state.target=null;}}
+async function submitAction(payload){if(state.demo){if(payload.turnDeadline!=null)payload.turnDeadline+=demoTimeOffset;act(state.demoGame,'local-player',payload,demoNow());if(!Object.hasOwn(nightLabels,payload.type))state.target=null;syncDemo();}else{await mutation('/api/action',payload);if(!Object.hasOwn(nightLabels,payload.type))state.target=null;}}
 function clearInvite(){state.pendingInvite=null;const url=new URL(location.href);if(url.searchParams.has('room')){url.searchParams.delete('room');history.replaceState(null,'',url);}}
 function invitationUrl(code){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',code);return url.href;}
 async function joinRoom(code){if(!/^[0-9]{6}$/.test(code))throw new Error('请输入 6 位数字房号');await mutation('/api/join',{code});clearInvite();closeModal();state.page='room';state.replay=null;render();}
@@ -683,7 +728,7 @@ document.addEventListener('click',async event=>{
   }
   if(b.dataset.do==='copy-code'){await copyCode();return;}
   if(b.dataset.page){event.preventDefault();await navigate(b.dataset.page);return;}
-  if(b.dataset.count){const r=b.dataset.count;state.config.roles[r]=Math.max(0,Math.min(r==='wolf'?6:r==='villager'?12:1,(state.config.roles[r]??0)+Number(b.dataset.delta)));updateCounts();return;}
+  if(b.dataset.count){const r=b.dataset.count;state.config.roles[r]=Math.max(0,Math.min(roleLimit(r),(state.config.roles[r]??0)+Number(b.dataset.delta)));updateCounts();return;}
   if(isVoting(state.room?.game)&&(b.dataset.target||b.dataset.action==='abstain')){
     const g=state.room.game,target=b.dataset.target||null,roomCode=state.room.code,phase=g.phase,turnDeadline=g.deadline;
     if(state.replay||state.room.isSpectator||!g.actionable||target&&!availableTarget(g,target))return;
@@ -697,7 +742,7 @@ document.addEventListener('click',async event=>{
   if(state.busy)return;
   if(b.dataset.target){selectTarget(b.dataset.target);return;}
   if(b.dataset.skillTarget||b.dataset.skillChoice){if(state.skill){state.skill.targetId=b.dataset.skillTarget||null;renderSkillModal();}return;}
-  state.busy=true;b.disabled=true;
+  state.busy=true;b.dataset.pending='';b.disabled=true;
   try{
     if(b.dataset.seat){
       if(!state.room||state.replay||state.room.game)throw new Error('开局前才能选择座位');
@@ -706,11 +751,13 @@ document.addEventListener('click',async event=>{
     else if(b.dataset.history){const local=state.demoHistory.find(g=>g.code===b.dataset.history);state.replay=local?local.room:(await request('/api/history/'+encodeURIComponent(b.dataset.history))).room;state.page='room';render();}
     else if(b.dataset.action){
       const a=b.dataset.action,g=state.room?.game,type=g?.action?.type;
-      if(state.replay||!g?.actionable||g.submitted||isVoting(g)||!type)throw new Error('当前不能进行此行动');
-      if(['confirm','poison'].includes(a)&&!availableTarget(g,state.target))throw new Error('请选择有效目标');
-      if(a==='save'&&(!g.privateInfo?.nightVictim||!g.action.choices?.includes('save')))throw new Error('当前不能使用解药');
-      const targetId=a==='save'?g.privateInfo.nightVictim.id:['confirm','poison'].includes(a)?state.target:null;
-      await submitAction({type,targetId,choice:['witch','sheriff_signup','sheriff_direction'].includes(type)?a:undefined});
+      const night=currentNightAction(g);
+      if(state.replay||!g?.actionable||(g.submitted&&!night)||isVoting(g)||!type)throw new Error('当前不能进行此行动');
+      if(['confirm','poison','save'].includes(a)&&!availableTarget(g,state.target))throw new Error('请选择有效目标');
+      if(a==='save'&&(state.target!==g.privateInfo?.nightVictim?.id||!g.action.choices?.includes('save')))throw new Error('当前不能使用解药');
+      const targetId=['confirm','save','poison'].includes(a)?state.target:null;
+      await submitAction({type,targetId,choice:['witch','sheriff_signup','sheriff_direction'].includes(type)?a:undefined,
+        ...(night?{round:g.round,turnDeadline:night.deadline??g.deadline}:{})});
     }
     else switch(b.dataset.do){
       case'close-modal':closeModal();break;
@@ -737,7 +784,7 @@ document.addEventListener('click',async event=>{
       case'demo':startDemo();break;
       case'demo-next':demoTimeOffset=Math.max(demoTimeOffset,state.demoGame.deadline-Date.now());advance(state.demoGame,demoNow());syncDemo();break;
     }
-  }catch(e){toast(e.message);}finally{state.busy=false;if(b.isConnected)b.disabled=false;}
+  }catch(e){toast(e.message);}finally{state.busy=false;if(b.isConnected && b.dataset.pending!==undefined){delete b.dataset.pending;b.disabled=false;}}
 });
 
 let typingTimer, lastTypingSent=0, lastTypingTurn='';
@@ -780,7 +827,7 @@ document.addEventListener('scroll',event=>{if(event.target.id==='code-editor')sy
 document.addEventListener('keyup',event=>{if(event.target.id==='code-editor')syncCodeGutter(event.target);});
 document.addEventListener('selectionchange',()=>{if(document.activeElement?.id==='code-editor')syncCodeGutter(document.activeElement);});
 document.addEventListener('submit',async event=>{
-  event.preventDefault();const f=event.target;if(state.busy)return;state.busy=true;const submit=f.querySelector('[type="submit"]');if(submit)submit.disabled=true;
+  event.preventDefault();const f=event.target;if(state.busy)return;state.busy=true;const submit=f.querySelector('[type="submit"]');if(submit){submit.dataset.pending='';submit.disabled=true;}
   try{
     if(f.id==='settings-form'){
       let url=$('#api-base').value.trim().replace(/\/$/,'') || defaultApi;if(url){const u=new URL(url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw new Error('请填写不含路径、账户或参数的 HTTP(S) 地址');if(u.pathname!=='/')throw new Error('只需填写服务器域名，不需要 /api 路径');if(location.protocol==='https:'&&u.protocol!=='https:')throw new Error('当前网站使用 HTTPS，服务器也需要 HTTPS');}
@@ -793,7 +840,8 @@ document.addEventListener('submit',async event=>{
     }else if(f.id==='join-form'||f.id==='quick-join'){await joinRoom(new FormData(f).get('code').trim());}
     else if(f.dataset.chat){
       const channel=f.dataset.chat, draftKey=channel==='wolf'?'wolfDraft':'draft', sentDraft=state[draftKey], sentScope=draftScope, text=sentDraft.trim();if(!text)throw new Error('请输入发言内容');
-      if(state.demo){const g=state.room.game;if(g.phase!=='finished'&&!(channel==='wolf'?g.canWolfChat:g.canSpeak))throw new Error('当前不能发送消息');state.room.messages.push({name:state.name,seat:g.players.find(p=>p.id===state.player.id)?.seat,text,channel,at:demoNow()});}
+      if(!canSendChat(state.room,channel))throw new Error('当前不能发送消息');
+      if(state.demo){const g=state.room.game;state.room.messages.push({name:state.name,seat:g.players.find(p=>p.id===state.player.id)?.seat,text,channel,at:demoNow()});}
       else await mutation('/api/chat',{text,channel});
       if(sentScope===draftScope && state[draftKey]===sentDraft){
         state[draftKey]='';
@@ -804,9 +852,18 @@ document.addEventListener('submit',async event=>{
       }
       render();
     }
-  }catch(e){const error=f.querySelector('.form-error');if(error)error.textContent=e.message;else toast(e.message);}finally{state.busy=false;if(submit?.isConnected)submit.disabled=false;}
+  }catch(e){const error=f.querySelector('.form-error');if(error)error.textContent=e.message;else toast(e.message);}finally{state.busy=false;if(submit?.isConnected && submit.dataset.pending!==undefined){delete submit.dataset.pending;submit.disabled=false;}}
 });
 document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
+    const field=e.target,form=field?.form,channel=form?.dataset.chat;
+    if((channel==='public'||channel==='wolf')&&field.id==='draft-'+channel){
+      e.preventDefault();
+      const send=form.querySelector('[type="submit"]');
+      if(!e.repeat&&!state.busy&&send&&!send.disabled&&field.value.trim()&&canSendChat(state.room,channel))form.requestSubmit(send);
+      return;
+    }
+  }
   if(e.key==='Escape')closeModal();
   if(e.key==='Tab'&&state.modal){const list=[...document.querySelectorAll('.modal button,.modal input,.modal select,.modal textarea')].filter(x=>!x.disabled);if(!list.length)return;const first=list[0],last=list.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}
 });

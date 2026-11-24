@@ -110,6 +110,9 @@ test('SQLite restart restores an advanced game, hidden roles, sessions, messages
   for (const wolf of wolves) {
     assert.equal((await original.request('/api/action', { token: wolf.token, body: { type: 'wolf', targetId: villager.player.id } })).status, 200);
   }
+  assert.equal((await original.request('/api/room', { token: seer.token })).data.room.game.action, null);
+  now = game.deadline;
+  original.app.tick();
   assert.equal((await original.request('/api/action', { token: seer.token, body: { type: 'seer', targetId: wolves[0].player.id } })).status, 200);
   now = game.deadline;
   original.app.tick();
@@ -129,7 +132,8 @@ test('SQLite restart restores an advanced game, hidden roles, sessions, messages
   const beforeGame = jsonClone(game);
   const beforeMessages = jsonClone(room.messages);
   const beforeSeats = room.players.map(({ id, name, seat, ready }) => ({ id, name, seat, ready }));
-  assert.equal(beforeGame.potions.save, false);
+  const witchView = (await original.request('/api/room', { token: witch.token })).data.room.game;
+  assert.equal(witchView.privateInfo.potions.save, false);
   assert.equal(beforeGame.investigations[seer.player.id][0].team, 'wolf');
   assert.equal(beforeGame.actions[villager.player.id].targetId, wolves[0].player.id);
   await original.stop();

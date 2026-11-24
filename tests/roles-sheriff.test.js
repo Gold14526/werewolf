@@ -46,7 +46,8 @@ test('special wolves count toward configuration balance and good specials count 
   assert.equal(validateConfig({ roles: { whiteWolfKing: 1, villager: 4, knight: 1 } }).sheriff, false);
   assert.throws(() => validateConfig({ roles: { wolf: 1, wolfKing: 1, whiteWolfKing: 1, villager: 2, fool: 1 } }));
   assert.throws(() => validateConfig({ ...ALL, sheriff: 'yes' }));
-  assert.throws(() => validateConfig({ ...ALL, roles: { ...ALL.roles, knight: 2 } }));
+  assert.equal(validateConfig({ ...ALL, roles: { ...ALL.roles, knight: 2 } }).roles.knight, 2);
+  assert.throws(() => validateConfig({ ...ALL, roles: { ...ALL.roles, whiteWolfKing: 2 } }));
   assert.equal(STANDARD_CONFIG.sheriff, false);
   assert.equal(STANDARD_CONFIG.nightSeconds, 75);
   assert.equal(validateConfig({ roles: { wolfKing: 1, villager: 4, fool: 1 } }).nightSeconds, 75);
@@ -58,6 +59,7 @@ test('special wolves count toward configuration balance and good specials count 
 
 test('kings participate in wolf stage, hidden team chat and seer alignment without exact-role leak', () => {
   const g = game();
+  advance(g, g.deadline);
   const kings = [who(g, 'wolfKing'), who(g, 'whiteWolfKing')], good = who(g, 'villager');
   for (const king of kings) {
     assert.equal(viewGame(g, king.id).actionable, true);
@@ -66,6 +68,7 @@ test('kings participate in wolf stage, hidden team chat and seer alignment witho
     assert.equal(viewGame(g, good.id).players.find(p => p.id === king.id).role, undefined);
     send(g, king.id, { type: 'wolf', targetId: good.id });
   }
+  advance(g, g.deadline);
   send(g, who(g, 'seer').id, { type: 'seer', targetId: kings[0].id }); advance(g, g.deadline);
   assert.equal(viewGame(g, who(g, 'seer').id).privateInfo.results[0].team, 'wolf');
   assert.equal(viewGame(g, who(g, 'seer').id).privateInfo.results[0].role, undefined);
