@@ -203,3 +203,92 @@ test('role-rich randomized legal view actions always progress without hidden sta
     assert.equal(g.phase, 'finished', `match ${match} must finish`);
   }
 });
+
+test('living wolves see settled pack ballots, never private good actions or an inferred death', () => {
+  const g = game({ ...CONFIG, sheriff: false });
+  const wolves = g.players.filter(p => isWolfRole(p.role));
+  const [wolf, king, white] = wolves;
+  const guard = role(g, 'guard'), target = role(g, 'villager');
+  const history = id => viewGame(g, id).privateInfo.wolfHistory;
+  submit(g, guard.id, { type: 'guard', targetId: target.id });
+  advance(g, g.deadline);
+  submit(g, wolf.id, { type: 'wolf', targetId: guard.id });
+  submit(g, wolf.id, { type: 'wolf', targetId: target.id });
+  submit(g, king.id, { type: 'wolf', targetId: target.id });
+  assert.deepEqual(history(white.id), []);
+  advance(g, g.deadline);
+  const entry = {
+    round: 1, targetId: target.id,
+    ballots: [wolf, king, white].map(p => ({ playerId: p.id, targetId: p === white ? null : target.id })),
+  };
+  for (const p of wolves) assert.deepEqual(history(p.id), [entry]);
+  assert.equal(history(guard.id), undefined);
+  assert.equal(history(null), undefined);
+  const original = history(wolf.id);
+  original[0].ballots[0].targetId = guard.id;
+  assert.deepEqual(history(wolf.id), [entry]);
+
+  while (g.phase === 'night') advance(g, g.deadline);
+  assert.equal(target.alive, true, 'the guard stopped the attack');
+  assert.deepEqual(history(wolf.id), [entry]);
+  while (g.phase === 'discussion') submit(g, g.currentSpeakerId, { type: 'pass' });
+  advance(g, g.deadline);
+  advance(g, g.deadline);
+  submit(g, wolf.id, { type: 'wolf', targetId: guard.id });
+  submit(g, king.id, { type: 'wolf', targetId: target.id });
+  assert.equal(history(king.id).length, 1);
+  advance(g, g.deadline);
+  assert.deepEqual(history(king.id).map(n => [n.round, n.targetId]), [[1, target.id], [2, null]]);
+  assert.deepEqual(history(king.id)[1].ballots, [
+    { playerId: wolf.id, targetId: guard.id }, { playerId: king.id, targetId: target.id }, { playerId: white.id, targetId: null },
+  ]);
+});
+
+test('legacy wolf audit text is decoded by seat, unrelated entries excluded and target-only history survives rollover', () => {
+  const g = game({ ...CONFIG, sheriff: false });
+  const wolf = role(g, 'wolf'), king = role(g, 'wolfKing'), target = role(g, 'villager');
+  g.round = 3;
+  g.audit = [
+    { round: 1, text: `【复盘】狼人投票：${wolf.seat} 号→${target.seat} 号，${king.seat} 号→无人；最终袭击：${target.seat} 号。` },
+    { round: 1, text: '【复盘】女巫未使用药剂。' },
+    { round: 2, text: `【复盘】狼人投票：${wolf.seat} 号→无人；最终袭击：无人。` },
+    { round: 2, text: `【复盘】狼人投票：${king.seat} 号→无人；最终袭击：无人。`, wolfAttack: { targetId: null, ballots: [{ playerId: king.id, targetId: null }] } },
+  ];
+  const first = { round: 1, targetId: target.id, ballots: [{ playerId: wolf.id, targetId: target.id }, { playerId: king.id, targetId: null }] };
+  const second = { round: 2, targetId: null, ballots: [{ playerId: king.id, targetId: null }] };
+  const history = () => viewGame(g, wolf.id).privateInfo.wolfHistory;
+  assert.deepEqual(history(), [first, second], 'no fabricated empty attack before the wolf window has opened');
+  g.phase = 'vote';
+  g.night.victim = target.id;
+  const third = { round: 3, targetId: target.id, ballots: null };
+  assert.deepEqual(history(), [first, second, third]);
+  advance(g, g.deadline);
+  assert.equal(g.round, 4);
+  assert.deepEqual(history(), [first, second, third]);
+  const loaded = JSON.parse(JSON.stringify(g));
+  assert.deepEqual(viewGame(loaded, wolf.id).privateInfo.wolfHistory, [first, second, third]);
+});
+
+test('direct game projections for pending or eliminated wolves withhold the pack view, while endgame stays public', () => {
+  const g = game({ ...CONFIG, sheriff: false });
+  const king = role(g, 'wolfKing'), wolf = role(g, 'wolf');
+  night(g, king.id);
+  assert.equal(g.phase, 'hunter');
+  const pending = viewGame(g, king.id);
+  assert.equal(pending.action.type, 'hunter');
+  assert.equal(pending.privateInfo.wolfHistory, undefined);
+  assert.equal(pending.privateInfo.wolfTeammates, undefined);
+  assert.equal(pending.players.find(p => p.id === wolf.id).role, undefined);
+  assert.equal(viewGame(g, wolf.id).players.find(p => p.id === king.id).role, 'wolfKing');
+  submit(g, king.id, { type: 'hunter', targetId: null });
+  assert.equal(viewGame(g, king.id).privateInfo.wolfHistory, undefined);
+  const copy = JSON.parse(JSON.stringify(g));
+  copy.phase = 'finished';
+  for (const id of [null, king.id, wolf.id]) {
+    const replay = viewGame(copy, id);
+    assert.equal(replay.privateInfo.wolfHistory, undefined);
+    assert(replay.players.every(p => p.publicRole));
+    assert(replay.log.some(entry => entry.text.startsWith('【复盘】狼人投票：')));
+    assert(replay.log.every(entry => !('wolfAttack' in entry)));
+  }
+});

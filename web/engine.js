@@ -111,7 +111,9 @@ function addLog(game, text, now) {
 }
 function addAudit(game, text, now) {
   game.eventSequence = (game.eventSequence ?? 0) + 1;
-  game.audit.push({ round: game.round, text: `【复盘】${text}`, at: now, seq: game.eventSequence });
+  const entry = { round: game.round, text: `【复盘】${text}`, at: now, seq: game.eventSequence };
+  (game.audit ??= []).push(entry);
+  return entry;
 }
 function targetLabel(game, id) { const target = player(game, id); return target ? `${target.seat} 号` : '无人'; }
 export function isPendingDeath(game, id) {
@@ -236,6 +238,64 @@ function canSave(game, witch) {
 function wolfBallots(game) {
   return Object.fromEntries(Object.entries(game.actions).filter(([id]) => isWolfRole(player(game, id)?.role)));
 }
+// Before structured wolf ballots, this exact server-generated audit line was the
+// only persistent record of the pack's votes. Never expose free-form audit text.
+function readLegacyWolfAttack(game, text) {
+  const match = /^【复盘】狼人投票：(.*)；最终袭击：(无人|\d+ 号)。$/u.exec(text);
+  if (!match) return null;
+  const playerAt = label => game.players.find(p => p.seat === Number.parseInt(label, 10));
+  const targetFrom = label => label === '无人' ? null : playerAt(label)?.id;
+  const targetId = targetFrom(match[2]);
+  if (targetId === undefined) return null;
+  const ballots = [];
+  for (const vote of match[1] ? match[1].split('，') : []) {
+    const pair = /^(\d+) 号→(无人|\d+ 号)$/u.exec(vote);
+    if (!pair) return { targetId, ballots: null };
+    const voter = playerAt(pair[1]);
+    const choice = targetFrom(pair[2]);
+    if (!isWolfRole(voter?.role) || choice === undefined) return { targetId, ballots: null };
+    ballots.push({ playerId: voter.id, targetId: choice });
+  }
+  return { targetId, ballots };
+}
+
+function recordedWolfAttack(game, entry) {
+  return entry.wolfAttack ?? (entry.text?.startsWith('【复盘】狼人投票：') ? readLegacyWolfAttack(game, entry.text) : null);
+}
+
+function snapshotWolfAttack(game) {
+  // Initializing a night writes victim:null before anyone has voted.
+  if (!game.night || !own(game.night, 'victim') || ['guard', 'wolf'].includes(game.phase)) return null;
+  if (game.phase === 'night' && game.night.windows.some(w => w.role === 'wolf')) return null;
+  const targetId = game.night.victim;
+  return targetId === null || player(game, targetId) ? { targetId, ballots: null } : null;
+}
+
+function preserveLegacyWolfAttack(game, now) {
+  const attack = snapshotWolfAttack(game);
+  if (attack && !(game.audit ?? []).some(entry => entry.round === game.round && recordedWolfAttack(game, entry))) {
+    const entry = addAudit(game, `狼人最终袭击：${targetLabel(game, attack.targetId)}（旧记录无逐票信息）。`, now);
+    entry.wolfAttack = attack;
+  }
+}
+
+function wolfHistory(game) {
+  const nights = new Map();
+  for (const entry of game.audit ?? []) {
+    if (!Number.isInteger(entry.round)) continue;
+    const attack = recordedWolfAttack(game, entry);
+    if (attack && (entry.wolfAttack || !nights.has(entry.round))) {
+      const ballots = attack.ballots?.map(({ playerId, targetId }) => ({ playerId, targetId })) ?? null;
+      nights.set(entry.round, { round: entry.round, targetId: attack.targetId, ballots });
+    }
+  }
+  if (!nights.has(game.round)) {
+    const attack = snapshotWolfAttack(game);
+    if (attack) nights.set(game.round, { round: game.round, ...attack });
+  }
+  return [...nights.values()].sort((a, b) => a.round - b.round);
+}
+
 function advanceNight(game, now) {
   while (game.phase === 'night' && now >= game.deadline) {
     const windows = game.night.windows;
@@ -375,6 +435,8 @@ function finishOrResume(game, resume, now) {
   if (resume?.type === 'discussion') startDiscussion(game, now, resume.queue);
   else if (resume === 'discussion') beginDiscussion(game, now);
   else {
+    // Preserve any pointer left in a pre-audit snapshot before replacing game.night.
+    preserveLegacyWolfAttack(game, now);
     if (game.round >= 20) {
       game.winner = 'draw'; game.phase = 'finished'; game.deadline = null; game.currentSpeakerId = null;
       addLog(game, '已完成 20 个夜晚，双方仍未达成胜利条件，本局平局。', now);
@@ -418,6 +480,7 @@ function checkWinner(game, now, includeAfkDraw = true) {
   } else if (!living.some(p => p.role === 'villager') || !living.some(p => !isWolfRole(p.role) && p.role !== 'villager')) winner = 'wolf';
   if (!winner && includeAfkDraw && living.length && living.every(p => p.afk)) winner = 'draw';
   if (!winner) return false;
+  preserveLegacyWolfAttack(game, now);
   const pending = game.players.filter(p => isPendingDeath(game, p.id));
   game.pendingHunters = [];
   game.pendingBadgeId = null;
@@ -440,8 +503,10 @@ function checkWinner(game, now, includeAfkDraw = true) {
 function resolveNightRole(game, phase, now) {
   if (phase === 'wolf') {
     game.night.victim = plurality(wolfBallots(game));
-    const ballots = live(game).filter(p => isWolfRole(p.role)).map(p => `${p.seat} 号→${targetLabel(game, game.actions[p.id]?.targetId)}`).join('，');
-    addAudit(game, `狼人投票：${ballots}；最终袭击：${targetLabel(game, game.night.victim)}。`, now);
+    const ballots = live(game).filter(p => isWolfRole(p.role)).map(p => ({ playerId: p.id, targetId: game.actions[p.id]?.targetId ?? null }));
+    const voteText = ballots.map(v => `${targetLabel(game, v.playerId)}→${targetLabel(game, v.targetId)}`).join('，');
+    const entry = addAudit(game, `狼人投票：${voteText}；最终袭击：${targetLabel(game, game.night.victim)}。`, now);
+    entry.wolfAttack = { targetId: game.night.victim, ballots };
     return;
   }
   const actors = live(game).filter(p => p.role === phase);
@@ -735,9 +800,10 @@ export function viewGame(game, viewerId) {
   const canPass = viewerId !== null && SPEECH_PHASES.includes(game.phase) && game.currentSpeakerId === viewerId;
   const turn = nightTurn(game, viewer);
   const actionable = canPass || (eligible(game).includes(viewerId) && (!submitted || Boolean(turn) || VOTE_PHASES.includes(game.phase)));
+  const hasWolfView = game.phase !== 'finished' && isStanding(game, viewer) && isWolfRole(viewer.role);
   const publicPlayer = p => {
     const publicRole = game.phase === 'finished' || p.revealed || p.foolRevealed;
-    const knowsRole = publicRole || p.id === viewerId || (isWolfRole(viewer.role) && isWolfRole(p.role));
+    const knowsRole = publicRole || p.id === viewerId || (hasWolfView && isWolfRole(p.role));
     return {
       id: p.id, name: p.name, seat: p.seat, alive: p.alive, afk: Boolean(p.afk),
       ...(p.foolRevealed ? { foolRevealed: true } : {}),
@@ -761,7 +827,8 @@ export function viewGame(game, viewerId) {
   const actionPhase = turn?.role ?? game.phase;
   const privateInfo = {};
   if (viewer.role === 'seer') privateInfo.results = (own(game.investigations, viewerId) ? game.investigations[viewerId] : []).map(r => ({ ...r }));
-  if (isWolfRole(viewer.role)) {
+  if (hasWolfView) {
+    privateInfo.wolfHistory = wolfHistory(game);
     privateInfo.wolfTeammates = game.players.filter(p => isWolfRole(p.role) && p.id !== viewerId).map(p => ({ id: p.id, name: p.name, seat: p.seat }));
     if (turn?.role === 'wolf') privateInfo.wolfVotes = Object.entries(wolfBallots(game)).map(([playerId, action]) => ({ playerId, targetId: action.targetId }));
   }
@@ -795,7 +862,7 @@ export function viewGame(game, viewerId) {
   return {
     config: { ...game.config, roles: { ...game.config.roles } }, phase: visiblePhase, phaseLabel, round: game.round,
     nightStages, deadline: game.deadline, winner: game.winner, players: game.players.map(publicPlayer), myRole: viewer.role,
-    log: (game.phase === 'finished' ? [...game.log, ...game.audit].sort((a, b) => a.at - b.at || a.seq - b.seq) : game.log).map(({ round, text, at }) => ({ round, text, at })), actionable, submitted, action, privateInfo,
+    log: (game.phase === 'finished' ? [...game.log, ...(game.audit ?? [])].sort((a, b) => a.at - b.at || a.seq - b.seq) : game.log).map(({ round, text, at }) => ({ round, text, at })), actionable, submitted, action, privateInfo,
     currentSpeakerId: game.currentSpeakerId, canSpeak: canChat(game, viewerId), canWolfChat: canChat(game, viewerId, 'wolf'),
     myAfk: Boolean(viewer.afk),
     inactivityDeadline: canPass && !viewer.afk && game.inactivityDeadline <= game.deadline ? game.inactivityDeadline ?? null : null,

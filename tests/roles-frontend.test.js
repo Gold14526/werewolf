@@ -146,7 +146,7 @@ test('special wolves see the wolf channel, sheriff badges and revealed fool stat
   const ui = await frontend();
   for (const role of ['wolfKing', 'whiteWolfKing']) {
     ui.app.state.problemTab = 'description';
-    putInRoom(ui.app, gameView({ myRole: role, sheriffId: 'me', players: [
+    putInRoom(ui.app, gameView({myRole:role,privateInfo:{wolfTeammates:[]},sheriffId:'me',players: [
       { id: 'me', name: '测试玩家', seat: 1, alive: true, role },
       { id: 'target', name: '<script>坏名字</script>', seat: 2, alive: true, role: 'fool', foolRevealed: true },
     ] }));
@@ -223,7 +223,7 @@ test('Ctrl+Enter submits the permitted chat form once and leaves other editing a
   assert.match(ui.app.roomView(),/Ctrl\+Enter 发送/);
   assert.deepEqual(await press('public','  白天发言  '),{prevented:true,submits:1});
   assert.deepEqual(chatCalls().at(-1).body,{channel:'public',text:'白天发言'});
-  putInRoom(ui.app,gameView({phase:'night',myRole:'wolf',canSpeak:false,canWolfChat:true}));
+  putInRoom(ui.app,gameView({phase:'night',myRole:'wolf',privateInfo:{wolfTeammates:[]},canSpeak:false,canWolfChat:true}));
   assert.deepEqual(await press('wolf','夜间讨论'),{prevented:true,submits:1});
   assert.deepEqual(chatCalls().at(-1).body,{channel:'wolf',text:'夜间讨论'});
   assert.deepEqual(await press('public','还没轮到我'),{prevented:true,submits:0});
@@ -251,21 +251,30 @@ function tagBody(html){
   return body[1];
 }
 
-test('private identity and wolf knowledge stay in collapsed tags; only public roles label live seats',async()=>{
+test('private team badges distinguish every wolf teammate from the hidden personal role and public reveals',async()=>{
   const ui=await frontend();
   const game=gameView({myRole:'whiteWolfKing',canDuel:false,players:[
     {id:'me',name:'甲',seat:1,alive:true,role:'whiteWolfKing'},
     {id:'wolf',name:'乙',seat:2,alive:true,role:'wolfKing'},
     {id:'fool',name:'丙',seat:3,alive:true,role:'fool',publicRole:'fool',foolRevealed:true},
+    {id:'wolf2',name:'丁',seat:4,alive:false,role:'wolfKing'},
+    {id:'white2',name:'戊',seat:5,alive:true,role:'whiteWolfKing'},
+    {id:'regular',name:'己',seat:6,alive:false,role:'wolf'},
   ],privateInfo:{wolfTeammates:[{id:'wolf',name:'乙',seat:2}]}});
   putInRoom(ui.app,game);
   let html=ui.app.roomView();
   assert.doesNotMatch(seatMarkup(html,1),/seat-role|白狼王/);
-  assert.doesNotMatch(seatMarkup(html,2),/seat-role|狼王/);
+  for(const [seat,role] of [[2,'狼王'],[4,'狼王'],[5,'白狼王'],[6,'狼人']]){
+    assert.match(seatMarkup(html,seat),new RegExp('仅狼队可见：'+role));
+    assert.doesNotMatch(seatMarkup(html,seat),/公开身份/);
+  }
   assert.match(seatMarkup(html,3),/class="seat-role" aria-label="公开身份：愚者"><span class="badge god">愚者/);
   assert.doesNotMatch(tagBody(html),/你的身份|白狼王|狼人同伴/);
   await ui.click({sidebarToggle:'tags'});
   assert.match(tagBody(ui.app.roomView()),/你的身份：[\s\S]*白狼王[\s\S]*狼人同伴：2 号 乙/);
+  game.players[1].publicRole='wolfKing';
+  assert.match(seatMarkup(ui.app.roomView(),2),/公开身份：狼王/);
+  assert.doesNotMatch(seatMarkup(ui.app.roomView(),2),/仅狼队可见/);
   game.players[0].publicRole='whiteWolfKing';
   html=ui.app.roomView();
   assert.match(seatMarkup(html,1),/公开身份：白狼王/);
@@ -273,7 +282,10 @@ test('private identity and wolf knowledge stay in collapsed tags; only public ro
   assert.match(tagBody(html),/狼人同伴：2 号 乙/);
   ui.app.state.room.isSpectator=true;
   assert.doesNotMatch(tagBody(ui.app.roomView()),/狼人同伴|你的身份|狼王/);
-  assert.doesNotMatch(seatMarkup(ui.app.roomView(),2),/seat-role/);
+  assert.doesNotMatch(seatMarkup(ui.app.roomView(),4),/seat-role/);
+  ui.app.state.room.isSpectator=false;
+  game.myRole='seer';
+  assert.doesNotMatch(seatMarkup(ui.app.roomView(),4),/seat-role/);
 });
 
 test('AFK shares the status area with speaking, sheriff and death; only settled deaths dim a card',async()=>{
@@ -344,4 +356,46 @@ test('a restored concurrent night shows a separate public countdown for each ope
     for(const stage of nightStages)assert.ok(html.includes(stage.label+' <strong class="timer" data-deadline="'+stage.deadline+'"'));
     assert.doesNotMatch(html,/data-target=|已确认：/);
   }
+});
+
+test('wolves review each resolved night and the team feed by day; drafts and actions resume at night',async()=>{
+  const ui=await frontend();
+  const game=gameView({myRole:'wolfKing',phase:'night',phaseLabel:'狼人行动',actionable:true,canWolfChat:true,
+    action:{type:'wolf',deadline:Date.now()+60000,targets:[{id:'target',name:'目标玩家',seat:2}]},
+    privateInfo:{wolfTeammates:[],wolfHistory:[]}});
+  putInRoom(ui.app,game);
+  await ui.click({do:'night-actions'});
+  assert.doesNotMatch(ui.app.roomView(),/狼队行动记录/);
+  ui.callbacks.get('input')({target:{id:'draft-wolf',value:'准备夜里再发的草稿'}});
+  ui.app.state.room.messages=[{id:'private',playerId:'me',name:'测试玩家',seat:1,text:'队内原话 <b>讨论</b>',channel:'wolf'}];
+  game.phase='discussion';game.phaseLabel='轮流发言';game.action=null;game.actionable=false;game.canWolfChat=false;
+  game.privateInfo.wolfHistory=[
+    {round:1,targetId:'target',ballots:[{playerId:'me',targetId:'target'}]},
+    {round:2,targetId:null,ballots:[{playerId:'me',targetId:null}]},
+    {round:3,targetId:'target',ballots:null},
+  ];
+  let html=ui.app.roomView();
+  assert.match(html,/白天只读/);assert.match(html,/队内原话 &lt;b&gt;讨论&lt;\/b&gt;/);
+  assert.match(html,/第 1 夜[\s\S]*最终刀口：2 号 目标玩家[\s\S]*1 号 测试玩家 → 2 号 目标玩家/);
+  assert.match(html,/第 2 夜[\s\S]*最终刀口：空刀[\s\S]*1 号 测试玩家 → 空刀/);
+  assert.match(html,/第 3 夜[\s\S]*本夜未保存逐人记录/);
+  assert.doesNotMatch(html,/id="draft-wolf"|data-chat="wolf"|data-action="confirm"|data-target=|准备夜里再发的草稿/);
+  const sent=ui.calls.length;
+  await ui.callbacks.get('submit')({preventDefault(){},target:{id:'',dataset:{chat:'wolf'},querySelector:()=>null}});
+  assert.equal(ui.calls.length,sent);
+  await ui.click({submitTab:'code'});assert.doesNotMatch(ui.app.roomView(),/狼队行动记录|队内原话/);
+  await ui.click({submitTab:'file'});
+  for(const [myRole,isSpectator,info,alive] of [['seer',false,game.privateInfo,true],['wolfKing',true,game.privateInfo,true],['wolfKing',false,{},true],['wolfKing',false,game.privateInfo,false]]){
+    const hidden=gameView({...game,myRole,privateInfo:info,players:game.players.map(p=>({...p,alive:p.id==='me'?alive:p.alive}))});
+    putInRoom(ui.app,hidden);ui.app.state.room.isSpectator=isSpectator;
+    ui.app.state.room.messages=[{id:'private',text:'队内原话',channel:'wolf'}];
+    assert.doesNotMatch(ui.app.roomView(),/狼队行动记录|狼人队内频道|队内原话/);
+  }
+  game.phase='night';game.phaseLabel='狼人行动';game.actionable=true;game.canWolfChat=true;
+  game.action={type:'wolf',deadline:Date.now()+60000,targets:[{id:'target',name:'目标玩家',seat:2}]};
+  putInRoom(ui.app,game);
+  html=ui.app.roomView();
+  assert.match(html,/第 1 夜[\s\S]*最终刀口：2 号 目标玩家/);
+  assert.match(html,/id="draft-wolf"[\s\S]*?准备夜里再发的草稿<\/textarea>/);
+  assert.match(html,/data-action="confirm"/);
 });

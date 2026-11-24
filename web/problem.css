@@ -264,6 +264,10 @@ body {
 .lg-background .seat.me .seat-name { color: #2980b9; }
 .lg-background .seat.empty .seat-name { color: #aaa; }
 .lg-background .seat-status { font-size: 11px; min-height: 18px; }
+.lg-background .team-role { pointer-events: auto; }
+.lg-background .team-role .badge { background: #fff0f2; color: #92273b; box-shadow: inset 0 0 0 1px #cb7181; }
+.wolf-history ol, .wolf-history ul { margin: 0; padding-left: 1.5em; }
+.wolf-history ol > li + li { margin-top: .65em; }
 .lg-background .seat-status .afk { background: #865514; color: #fff; }
 .lg-background .avatar { width: 36px; height: 36px; margin: 0 auto 5px; font-size: 18px; overflow: hidden; }
 .lg-background .avatar svg,

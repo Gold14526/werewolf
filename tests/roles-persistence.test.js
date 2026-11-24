@@ -389,3 +389,34 @@ test('Postgres reopens a legacy parallel night with public intervals and the ori
   assert.equal(viewGame(restored, rolePlayer(g, 'witch').id).privateInfo.nightVictim.id, villager.id);
   assert.deepEqual(spectator().privateInfo, {});
 });
+
+test('Postgres reopens a mixed legacy and current wolf history without disclosing it to other seats', async t => {
+  const store = await diskStore(t);
+  const g = game({ roles: { wolf: 1, wolfKing: 1, villager: 4 }, victory: 'all', nightSeconds: 75 });
+  const wolves = g.players.filter(p => isWolfRole(p.role));
+  const [firstVictim, secondTarget] = g.players.filter(p => p.role === 'villager');
+  finishNight(g, firstVictim.id);
+  const legacy = g.audit.find(row => row.round === 1 && row.text.startsWith('【复盘】狼人投票：'));
+  delete legacy.wolfAttack;
+  assert.equal(legacy.text, `【复盘】狼人投票：${wolves[0].seat} 号→${firstVictim.seat} 号，${wolves[1].seat} 号→${firstVictim.seat} 号；最终袭击：${firstVictim.seat} 号。`);
+  const first = { round: 1, targetId: firstVictim.id, ballots: wolves.map(p => ({ playerId: p.id, targetId: firstVictim.id })) };
+  finishDiscussion(g);
+  advance(g, g.deadline);
+  assert.equal(g.round, 2);
+  assert.deepEqual(viewGame(g, wolves[0].id).privateInfo.wolfHistory, [first]);
+  submit(g, wolves[0].id, { type: 'wolf', targetId: secondTarget.id });
+  submit(g, wolves[0].id, { type: 'wolf', targetId: null });
+  submit(g, wolves[1].id, { type: 'wolf', targetId: null });
+  advance(g, g.deadline);
+  const second = { round: 2, targetId: null, ballots: wolves.map(p => ({ playerId: p.id, targetId: null })) };
+  await store.save(g);
+  const recovered = await store.reopen();
+  for (const wolf of wolves) {
+    assert.deepEqual(viewGame(recovered, wolf.id).privateInfo.wolfHistory, [first, second]);
+  }
+  for (const viewer of [null, firstVictim.id, secondTarget.id]) {
+    const v = viewGame(recovered, viewer);
+    assert.ok(!Object.hasOwn(v.privateInfo, 'wolfHistory'));
+    assert.ok(v.log.every(row => !row.text.includes('狼人投票：')));
+  }
+});

@@ -34,7 +34,7 @@ function modal(title,body){state.modal=title;$('#modal-root').innerHTML=`<div cl
 function closeModal(){state.modal=null;state.skill=null;$('#modal-root').innerHTML='';}
 function rules(){return `<ol class="rules-list">
   <li><strong>身份：</strong>默认 12 人标准局，${roleTags(STANDARD_CONFIG)}。开局随机分配身份；狼人知道同伴，其他玩家只知道自己。</li>
-  <li><strong>天黑：</strong>守卫、狼人、预言家、女巫依次行动。玩家和观战者都可以在题目背景或提交文件中看到当前阶段和剩余时间。同一身份有多人时，每人独立确认自己的行动，截止前可改选或放弃。狼人可在队内频道讨论，选择袭击目标；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
+  <li><strong>天黑：</strong>守卫、狼人、预言家、女巫依次行动。玩家和观战者都可以在题目背景或提交文件中看到当前阶段和剩余时间。同一身份有多人时，每人独立确认自己的行动，截止前可改选或放弃。狼队行动时可在队内频道讨论并选择袭击目标，白天可在「提交文件」查看队内聊天和历夜刀口；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
   <li><strong>女巫与守卫：</strong>每名女巫各有一瓶解药和一瓶毒药，每晚最多用一瓶，标准局仅首夜被刀可自救，开房可调整；守卫不能连续守同一人。同守同救仍会死亡。</li>
   <li><strong>天亮：</strong>公布死亡玩家，不公开身份。首夜死者可发表遗言；随后存活玩家依次发言，只有当前玩家可以发送，可点击「结束发言」。未轮到时可先写草稿。轮到时连续 60 秒未键入会被判定为挂机，此后每次发言只有 2 秒，点击「回到游戏」可恢复。</li>
   <li><strong>投票：</strong>具有投票权的存活玩家同时投票，点击头像即可投给该玩家，截止前可随时改票或弃权，不能投自己；警长放逐票计 1.5 票。投票结束后公布票型；平票玩家再发言并重新投票，再次平票则无人出局。</li>
@@ -175,7 +175,7 @@ function identityPanel(room) {
   ].join('');
   if (!privateRole && !skills && !Object.keys(game.privateInfo||{}).length) return '';
   return `<div class="lg-personal-role">${privateRole?`<strong>你的身份：</strong>${badge(game.myRole)}
-    <p class="small">${escape(ROLE_INFO[game.myRole]?.description)}</p>`:''}${privateInfo(game)}
+    <p class="small">${escape(ROLE_INFO[game.myRole]?.description)}</p>`:''}${privateInfo(game,hasWolfView(room))}
     ${skills ? `<div class="controls">${skills}</div>` : ''}</div>`;
 }
 
@@ -246,16 +246,26 @@ function phaseClock(g){
   }
   return timer(g.deadline);
 }
+function hasWolfView(room){
+  const g=room?.game,info=g?.privateInfo;
+  return !state.replay&&!room?.isSpectator&&g?.phase!=='finished'&&isWolfRole(g?.myRole)&&
+    (Array.isArray(info?.wolfHistory)||Array.isArray(info?.wolfTeammates))&&
+    g.players.some(p=>p.id===state.player?.id&&p.alive!==false);
+}
 function roomBackground(room){
   const game=room.game,myId=state.player?.id,me=room.players.find(p=>p.id===myId),host=room.hostId===myId;
-  const players=game?.players||room.players,capacity=size(room.config),current=game?.players.find(p=>p.id===game.currentSpeakerId),voting=isVoting(game);
+  const players=game?.players||room.players,capacity=size(room.config),current=game?.players.find(p=>p.id===game.currentSpeakerId),voting=isVoting(game),wolfView=hasWolfView(room);
   return `<div class="lg-game-toolbar"><strong>${state.replay?'对局回放':'房间'} #${escape(room.code)}</strong>${membershipMenu()}<div><button class="link-button" data-page="lobby">大厅</button> · <button class="link-button" data-page="history">对局历史</button></div></div>${state.demo&&!state.replay?'<div class="alert warning">本地试玩 · 其余座位为随机行动的电脑玩家。</div>':''}
   <div class="room-status"><div><strong class="status-title">${game?game.phase==='finished'?resultLabel(game.winner):`第 ${game.round} ${NIGHT_PHASES.includes(game.phase)?'夜':'天'} · ${escape(game.phaseLabel)}`:room.matchmaking?'匹配中，等待玩家加入':'等待玩家准备'}</strong><p class="status-detail">${game?game.phase==='finished'?'游戏结束，所有身份与记录已公开。':current?`当前由 ${current.seat} 号 ${escape(current.name)} ${game.phase==='lastwords'?'发表遗言':'发言'}。`:voting?(game.actionable?'点击头像投票，截止前可以改投或弃权。':'等待本轮投票截止。'):NIGHT_PHASES.includes(game.phase)?'夜间行动请打开「提交答案 → 提交文件」。':'可展开「标签」查看身份和技能。':`${escape(room.name)} · ${room.players.length} / ${capacity} 人 · ${room.visibility==='private'?'私密房间':'公开房间'}`}</p></div>${game?.deadline?phaseClock(game):!game?`<div class="controls"><button class="btn secondary small" data-do="copy-room">复制房号</button><button class="btn primary small" data-do="copy-invite">复制邀请链接</button></div>`:''}</div>
   <div class="seats">${Array.from({length:capacity},(_,i)=>{
     const p=players.find(x=>x.seat===i+1);if(!p)return `<div class="seat empty"><span class="seat-number">${i+1}</span>${!game&&!state.replay?`<button type="button" class="avatar lg-seat-button" data-seat="${i+1}" aria-label="${me?'换到':'加入'} ${i+1} 号座位">＋</button>`:'<div class="avatar">＋</div>'}<div class="seat-name muted">等待加入</div></div>`;
     const ready=room.players.find(x=>x.id===p.id)?.ready,selectable=voting&&availableTarget(game,p.id),selected=selectable&&game.submitted&&game.myVoteTargetId===p.id;
     const publicRole=game&&(p.publicRole||(game.phase==='finished'?p.role:null));
-    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span>${publicRole?`<span class="seat-role" aria-label="公开身份：${escape(ROLE_INFO[publicRole]?.name||publicRole)}">${badge(publicRole)}</span>`:''}<button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${playerStatus(p,game,ready)}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
+    const teamRole=!publicRole&&wolfView&&p.id!==myId&&isWolfRole(p.role)?p.role:null;
+    const roleBadge=publicRole?`<span class="seat-role" aria-label="公开身份：${escape(ROLE_INFO[publicRole]?.name||publicRole)}">${badge(publicRole)}</span>`:
+      teamRole?`<span class="seat-role team-role" role="img" aria-label="仅狼队可见：${escape(ROLE_INFO[teamRole].name)}" title="仅狼队可见">${badge(teamRole)}</span>`:'';
+
+    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span>${roleBadge}<button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${playerStatus(p,game,ready)}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
   }).join('')}</div>${game?sheriffPanel(game):''}
   ${game?'':`<div class="config-tags">${roleTags(room.config)}</div><p class="small muted">${room.config.victory==='side'?'屠边':'屠城'} · 狼队 ${room.config.nightSeconds} 秒 · 其它行动 ${room.config.otherNightSeconds??30} 秒 · 女巫${selfSaveLabels[room.config.witchSelfSave??'first']}${room.config.shuffleSeats?' · 开局随机座位':''} · 每人发言 ${room.config.daySeconds} 秒 · ${room.config.sheriff?'开启上警':'不开启上警'}</p>`}
   ${!game?`<div class="controls">${room.isSpectator?'':room.matchmaking?'<span class="queue-count">满员后自动开始</span>':`<button class="btn ${me?.ready?'secondary':'primary'}" data-do="ready">${me?.ready?'取消准备':'准备'}</button>${host?`<button class="btn primary" data-do="start" ${room.players.length<capacity||room.players.some(p=>!p.ready)?'disabled':''}>开始游戏</button>`:''}`}${room.isSpectator?'':'<button class="btn secondary" data-do="observe">加入观战席</button>'}<button class="btn secondary" data-do="leave">${room.matchmaking&&!room.isSpectator?'取消匹配':'离开房间'}</button></div>`:state.replay?'<div class="controls"><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>':game.phase==='finished'?`<div class="controls"><button class="btn primary" data-do="leave">返回大厅</button><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>`:`${NIGHT_PHASES.includes(game.phase)?'<div class="action-panel"><button class="btn primary" data-do="night-actions">提交答案 → 提交文件</button><p class="small muted">展开「标签」可查看你的身份。</p></div>':actionPanel(game)}<div class="controls">${room.isSpectator?'<button class="btn secondary small" data-do="leave">离开房间</button>':''}${game.canWithdraw?'<button class="btn secondary small" data-do="withdraw">退出竞选（退水）</button>':''}${state.demo?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button><button class="btn secondary small" data-do="leave">退出试玩</button>':''}</div>`}`;
@@ -272,12 +282,33 @@ function syncCodeGutter(editor){
 }
 function codeEditor(){return `<div class="lg-code-editor"><div class="lg-code-toolbar"><label for="code-language">语言 <select class="input" id="code-language">${CODE_LANGUAGES.map(([id,name])=>`<option value="${id}" ${state.codeLanguage===id?'selected':''}>${name}</option>`).join('')}</select></label><button class="btn secondary small" data-do="copy-code">${uiIcon('copy')}复制代码</button></div><div class="lg-editor-surface lg-editor-frame"><pre id="code-line-numbers" class="lg-code-gutter lg-line-numbers" aria-hidden="true">${codeLineNumbers(state.codeDraft)}</pre><textarea id="code-editor" class="input" aria-label="代码编辑器" rows="20" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="在此输入代码…">${escape(state.codeDraft)}</textarea></div><div class="lg-editor-status"><span>代码已保存在此浏览器</span><span id="code-count">${state.codeDraft.length} 字符</span></div><div class="controls"><button type="button" class="btn primary" data-do="code-submit">提交评测</button></div></div>`;}
 
+function wolfHistoryPanel(g){
+  const history=g.privateInfo?.wolfHistory;
+  if(!Array.isArray(history))return '';
+  const playerName=id=>{
+    const p=g.players.find(player=>player.id===id);
+    return p?`${escape(p.seat)} 号 ${escape(p.name)}`:'座位未知';
+  };
+  const target=id=>id==null?'空刀':playerName(id);
+  const nights=history.map(night=>{
+    const ballots=Array.isArray(night.ballots)?night.ballots.map(v=>`<li>${playerName(v.playerId)} → ${target(v.targetId)}</li>`).join(''):null;
+    return `<li><strong>第 ${escape(night.round)} 夜</strong> · 最终刀口：${target(night.targetId)}
+      ${ballots===null?'<p class="small muted">本夜未保存逐人记录。</p>':ballots?`<ul>${ballots}</ul>`:''}</li>`;
+  }).join('');
+  return `<section class="card wolf-history"><div class="card-header"><strong>狼队行动记录</strong></div>
+    <div class="card-body">${nights?`<ol>${nights}</ol>`:'<p class="muted small">暂无已结算的夜间行动。</p>'}</div></section>`;
+}
 function nightActions(room){
   const g=room?.game;
   if(!room)return `<div class="action-panel"><p>加入房间后，可在这里进行夜间行动。</p><button class="btn primary" data-do="join-modal">输入房号加入</button></div>`;
-  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished';
-  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${phaseClock(g)}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&!room.isSpectator&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
+  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished',wolfView=hasWolfView(room);
+  const showWolfChat=wolfView||(finished&&!room.isSpectator);
+  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${phaseClock(g)}</div>
+    ${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}
+    ${showWolfChat?chatPanel(room,'wolf'):''}${wolfView&&(!night||g.privateInfo?.wolfHistory?.length)?wolfHistoryPanel(g):''}
+    <div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
 }
+
 function captureCodeEditor(){
   const editor=document.getElementById('code-editor');if(!editor)return;
   state.codeDraft=editor.value;storage.set('codeDraft',state.codeDraft);
@@ -348,7 +379,7 @@ async function copyCode(){
   catch{const editor=document.getElementById('code-editor');if(!editor)return;editor.focus();editor.select();let copied=false;try{copied=Boolean(document.execCommand?.('copy'));}catch{}if(copied){editor.setSelectionRange(state.codeSelection.start,state.codeSelection.end);toast('代码已复制');}else toast('代码已选中，请按 Ctrl+C 或 ⌘C 复制');}
 }
 
-function privateInfo(g){const info=g.privateInfo||{};return `<div class="private-info">${info.results?.length?`<div class="alert info">查验结果：${info.results.map(r=>`${r.seat} 号 ${escape(r.name)} · ${r.team==='wolf'?'狼人':'好人'}`).join('；')}</div>`:''}${info.wolfTeammates?.length?`<p class="small muted">狼人同伴：${info.wolfTeammates.map(p=>`${p.seat} 号 ${escape(p.name)}`).join('、')}</p>`:''}${info.wolfVotes?.length?`<p class="small muted">队内选择：${info.wolfVotes.map(v=>`${g.players.find(p=>p.id===v.playerId)?.seat} 号 → ${v.targetId?(g.players.find(p=>p.id===v.targetId)?.seat+' 号'):'空刀'}`).join('；')}</p>`:''}${info.potions?`<p class="small muted">解药：${info.potions.save?'可用':'已用'} · 毒药：${info.potions.poison?'可用':'已用'}${info.nightVictim?` · 今夜被袭击：${info.nightVictim.seat} 号 ${escape(info.nightVictim.name)}`:info.nightVictim===null?' · 今夜无人被刀':''}</p>`:''}</div>`;}
+function privateInfo(g,wolfView){const info=g.privateInfo||{};return `<div class="private-info">${info.results?.length?`<div class="alert info">查验结果：${info.results.map(r=>`${r.seat} 号 ${escape(r.name)} · ${r.team==='wolf'?'狼人':'好人'}`).join('；')}</div>`:''}${wolfView&&info.wolfTeammates?.length?`<p class="small muted">狼人同伴：${info.wolfTeammates.map(p=>`${p.seat} 号 ${escape(p.name)}`).join('、')}</p>`:''}${wolfView&&info.wolfVotes?.length?`<p class="small muted">队内选择：${info.wolfVotes.map(v=>`${g.players.find(p=>p.id===v.playerId)?.seat} 号 → ${v.targetId?(g.players.find(p=>p.id===v.targetId)?.seat+' 号'):'空刀'}`).join('；')}</p>`:''}${info.potions?`<p class="small muted">解药：${info.potions.save?'可用':'已用'} · 毒药：${info.potions.poison?'可用':'已用'}${info.nightVictim?` · 今夜被袭击：${info.nightVictim.seat} 号 ${escape(info.nightVictim.name)}`:info.nightVictim===null?' · 今夜无人被刀':''}</p>`:''}</div>`;}
 function sheriffPanel(g){
   if(!g.config.sheriff)return '';
   const holder=g.players.find(p=>p.id===g.sheriffId),candidates=g.sheriffCandidates||[];
@@ -421,11 +452,12 @@ async function confirmSkill(){
 function canSendChat(room,channel){
   if(!room||state.replay)return false;
   const game=room.game;
-  if(channel==='wolf')return Boolean(game?.canWolfChat);
+  if(channel==='wolf')return NIGHT_PHASES.includes(game?.phase)&&hasWolfView(room)&&Boolean(game.canWolfChat);
   return channel==='public'&&Boolean(game?.canSpeak||(!room.isSpectator&&(!game||game.phase==='finished')));
 }
 function chatPanel(room,channel){
   const g=room.game,isWolf=channel==='wolf',allowed=canSendChat(room,channel);
+  const canDraft=!state.replay&&(!room.isSpectator||allowed)&&(!isWolf||NIGHT_PHASES.includes(g?.phase));
   let entries=(room.messages||[]).filter(m=>(m.channel||'public')===channel).map(m=>{
     const at=m.at||m.createdAt||0;
     const entry = escape("m:" + (m.id || [at, m.playerId || m.name, m.text].join(":")));
@@ -434,9 +466,9 @@ function chatPanel(room,channel){
     return {at,html:`<div class="chat-message ${isWolf?'wolf-message':''}" data-entry="${entry}"><strong>${seat?`${escape(seat)} 号 `:''}${escape(m.name||m.playerName||'玩家')}</strong> ${escape(m.text)}</div>`};
   });
   if(!isWolf)entries=entries.concat((g?.log||[]).map(l=>({at:l.at,html:`<div class="system-message" data-entry="g:${escape(l.seq ?? [l.at, l.text].join(':'))}">${escape(l.text)}</div>`}))).sort((a,b)=>a.at-b.at);
-  const body = `<div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${!state.replay&&(!room.isSpectator||allowed)?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea>${!isWolf&&g?.inactivityDeadline?`<small id="afk-warning" class="form-error" data-inactivity="${g.inactivityDeadline}" hidden></small>`:''}<div class="chat-actions"><small class="muted">${allowed?'Ctrl+Enter 发送':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}`;
+  const body = `<div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${canDraft?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea>${!isWolf&&g?.inactivityDeadline?`<small id="afk-warning" class="form-error" data-inactivity="${g.inactivityDeadline}" hidden></small>`:''}<div class="chat-actions"><small class="muted">${allowed?'Ctrl+Enter 发送':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}`;
   if (!isWolf) return body;
-  return `<section class="card chat-card"><div class="card-header"><strong>狼人队内频道</strong><small class="muted">${g?.phase === 'finished' ? '对局已结束 · 记录公开' : '仅狼人夜间可见'}</small></div>${body}</section>`;
+  return `<section class="card chat-card"><div class="card-header"><strong>狼人队内频道</strong><small class="muted">${g?.phase === 'finished' ? '对局已结束 · 记录公开' : NIGHT_PHASES.includes(g?.phase)?'仅狼队可见':'白天只读'}</small></div>${body}</section>`;
 }
 // Polls patch the mounted page. A chat feed, its messages and its form retain
 // their native scroll, focus and composition state as new messages arrive.

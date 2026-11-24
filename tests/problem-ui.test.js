@@ -270,7 +270,7 @@ test('提交评测 is inert even with a real vote selected and a live room', asy
 test('night action controls and wolf chat exist only in 提交文件; code area stays independent', async () => {
   const ui = await frontend();
   const deadline=Date.now()+60000;
-  ui.putInRoom(gameView({ phase:'night',phaseLabel:'狼人行动',myRole:'wolfKing',canWolfChat:true,deadline,
+  ui.putInRoom(gameView({ phase:'night',phaseLabel:'狼人行动',myRole:'wolfKing',privateInfo:{wolfTeammates:[]},canWolfChat:true,deadline,
     action:{type:'wolf',deadline,targets:[{id:'target',name:'目标玩家',seat:2}]} }));
   assert.match(ui.html(), /data-do="night-actions"/);
   assert.doesNotMatch(ui.html(), /data-chat="wolf"|data-action="confirm"/);

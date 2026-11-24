@@ -757,3 +757,95 @@ for (const backend of ['node', 'cloud']) {
     assert.equal(dawn.game.players.find(p => p.id === villager.player.id).alive, true);
   });
 }
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} keeps daytime wolf records read-only and revokes team access as soon as elimination starts`, async t => {
+    const c = await setup(t, backend, { durable: true });
+    const { people, code } = await makeGame(c, { sheriff: false });
+    const wolves = people.filter(p => wolfRoles.has(p.role));
+    const wolf = wolves.find(p => p.role === 'wolf'), king = wolves.find(p => p.role === 'wolfKing');
+    const white = wolves.find(p => p.role === 'whiteWolfKing');
+    const [victim, survivor] = people.filter(p => p.role === 'villager');
+    const visitor = await c.session('观战记录测试');
+    const read = async person => {
+      const res = await c.request('/api/room?code=' + code, { token: person.token });
+      assert.equal(res.status, 200, res.data.error);
+      return res.data.room;
+    };
+    const post = (person, route, body) => c.request('/api/' + route + '?code=' + code, { token: person.token, body });
+    assert.equal((await c.request('/api/join', { token: visitor.token, body: { code } })).data.room.isSpectator, true);
+    const chat = { channel: 'wolf', text: '只在狼队频道保留的记录' };
+    assert.equal((await post(white, 'chat', chat)).status, 200);
+    const vote = (person, target) => post(person, 'action', { type: 'wolf', targetId: target?.player.id ?? null });
+    assert.equal((await vote(king, survivor)).status, 200);
+    assert.equal((await vote(king, victim)).status, 200);
+    assert.equal((await vote(wolf, victim)).status, 200);
+    assert.equal((await vote(white, null)).status, 200);
+    c.setNow((await read(white)).game.deadline);
+    assert.equal((await read(victim)).game.phase, 'lastwords');
+    assert.equal((await post(victim, 'action', { type: 'pass' })).status, 200);
+    await c.reloadHandler();
+
+    const expectedBallots = new Map([[king.player.id, victim.player.id], [wolf.player.id, victim.player.id], [white.player.id, null]]);
+    for (const person of wolves) {
+      const room = await read(person), game = room.game;
+      assert.equal(game.phase, 'discussion');
+      assert.equal(game.canWolfChat, false);
+      assert.equal(game.privateInfo.wolfVotes, undefined);
+      for (const teammate of wolves) {
+        const player = game.players.find(p => p.id === teammate.player.id);
+        assert.equal(player.role, teammate.role, 'all three wolf variants see each other’s exact identities');
+        assert.equal(player.publicRole, undefined);
+      }
+      assert.deepEqual(new Set(game.privateInfo.wolfTeammates.map(p => p.id)), new Set(wolves.filter(p => p !== person).map(p => p.player.id)));
+      assert.deepEqual(room.messages.filter(m => m.channel === 'wolf').map(m => m.text), [chat.text]);
+      assert.equal(game.privateInfo.wolfHistory.length, 1);
+      const night = game.privateInfo.wolfHistory[0];
+      assert.equal(night.round, 1);
+      assert.equal(night.targetId, victim.player.id);
+      assert.deepEqual(new Map(night.ballots.map(b => [b.playerId, b.targetId])), expectedBallots);
+      assert.ok((await post(person, 'chat', chat)).status >= 400);
+      assert.ok((await vote(person, survivor)).status >= 400);
+    }
+    const assertPrivate = (room, ownId = null) => {
+      assert.equal(room.messages.some(m => m.channel === 'wolf'), false);
+      for (const key of ['wolfHistory', 'wolfVotes', 'wolfTeammates']) assert.equal(room.game.privateInfo[key], undefined);
+      for (const key of ['actions', 'night', 'audit', 'wolfHistory']) assert.equal(room.game[key], undefined);
+      assert.ok(room.game.log.every(entry => !entry.text.includes('狼人投票')));
+      for (const teammate of wolves.filter(p => p.player.id !== ownId)) {
+        const publicSeat = room.game.players.find(p => p.id === teammate.player.id);
+        assert.equal(publicSeat.role, undefined);
+      }
+    };
+    for (const person of [survivor, victim, visitor]) assertPrivate(await read(person));
+    assert.equal((await c.request('/api/history/' + code, { token: visitor.token })).status, 404);
+
+    c.editRoom(code, ({ game }) => { game.phase = 'vote'; game.actions = {}; game.currentSpeakerId = null; });
+    const voted = await post(survivor, 'action', { type: 'vote', targetId: king.player.id });
+    assert.equal(voted.status, 200, voted.data.error);
+    c.setNow(voted.data.room.game.deadline);
+    const pending = await read(king);
+    assert.equal(pending.isSpectator, false);
+    assert.equal(pending.game.action.type, 'hunter');
+    assertPrivate(pending, king.player.id);
+    assert.ok((await post(king, 'chat', chat)).status >= 400);
+    assert.ok((await vote(king, survivor)).status >= 400);
+    assert.equal((await post(king, 'action', { type: 'hunter', targetId: null })).status, 200);
+    const retired = await read(king);
+    assert.equal(retired.isSpectator, true);
+    assert.equal(retired.game.myRole, null);
+    assertPrivate(retired);
+    assert.equal((await read(white)).game.privateInfo.wolfHistory.length, 1);
+
+    // Replays keep their original public audit and participant-only team chat.
+    c.editRoom(code, ({ game }) => { game.phase = 'finished'; game.winner = 'good'; game.deadline = null; });
+    await read(survivor);
+    for (const person of [survivor, white, visitor]) {
+      const replay = (await c.request('/api/history/' + code, { token: person.token })).data.room;
+      assert.ok(replay.game.players.every(p => p.role));
+      assert.ok(replay.game.log.some(entry => entry.text.includes('狼人投票')));
+      assert.equal(replay.messages.some(m => m.text === chat.text), person !== visitor);
+      assert.equal(replay.game.privateInfo.wolfHistory, undefined);
+    }
+  });
+}
