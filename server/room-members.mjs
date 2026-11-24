@@ -41,7 +41,18 @@ function unwatch(room, person, announce) {
   }
 }
 
+function preserveMessageSeats(room) {
+  if (room.messageSeatsVersion === 1) return;
+  for (const message of room.messages) {
+    if (message.playerId && message.seat === undefined) {
+      message.seat = room.players.find(p => p.id === message.playerId)?.seat ?? null;
+    }
+  }
+  room.messageSeatsVersion = 1;
+}
+
 export function updateRoom(room, now, announce) {
+  preserveMessageSeats(room);
   room.config.otherNightSeconds ??= 30;
   room.config.witchSelfSave ??= 'first';
   room.config.shuffleSeats ??= false;
@@ -165,6 +176,7 @@ export function gameView(game, id, spectator = false) {
 
 export function messagesFor(room, id, spectator) {
   const wolf = isWolfRole(room.game?.players.find(p => p.id === id)?.role);
-  return room.messages.filter(m => m.channel !== 'wolf' || (!spectator && (wolf || room.game?.phase === 'finished')))
-    .map(m => m.playerId && m.seat == null ? { ...m, seat: room.players.find(p => p.id === m.playerId)?.seat ?? null } : m);
+  // Archived rooms also pass through this projection on their first replay.
+  preserveMessageSeats(room);
+  return room.messages.filter(m => m.channel !== 'wolf' || (!spectator && (wolf || room.game?.phase === 'finished')));
 }

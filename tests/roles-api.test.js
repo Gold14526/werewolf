@@ -334,3 +334,35 @@ for (const backend of ['node', 'cloud']) {
     assert.equal(back.data.room.game.myAfk, false);
   });
 }
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} freezes legacy chat seat numbers before moving seats and shuffling the roster`, async t => {
+    const c = await setup(t, backend);
+    const people = [];
+    for (let i = 0; i < 9; i++) people.push(await c.session('座号测试' + i));
+    const [host, later] = people;
+    const post = (route, user, body) => c.request('/api/' + route, { token: user.token, body });
+    const created = await post('rooms', host, { config: { ...config, shuffleSeats: true } });
+    const { code } = created.data.room;
+    const oldMessage = (player, text) => ({ playerId: player.player.id, name: player.player.name, channel: 'public', text, at: 1 });
+    c.editRoom(code, room => {
+      delete room.messageSeatsVersion;
+      room.messages.push(oldMessage(host, '原一号发言'), oldMessage(later, '座号无法还原的发言'));
+    });
+    function checkTranscript(room) {
+      assert.equal(room.messages.find(m => m.text === '原一号发言').seat, 1);
+      assert.equal(room.messages.find(m => m.text === '座号无法还原的发言').seat, null);
+    }
+    const moved = await post('seat', host, { seat: 4 });
+    assert.equal(moved.data.room.players.find(p => p.id === host.player.id).seat, 4);
+    checkTranscript(moved.data.room);
+    for (const person of people.slice(1)) {
+      assert.equal((await post('join', person, { code })).status, 200);
+      assert.equal((await post('ready', person, { ready: true })).status, 200);
+    }
+    const started = await post('start', host, {});
+    assert.equal(started.status, 200, started.data.error);
+    checkTranscript(started.data.room);
+    c.editRoom(code, checkTranscript);
+  });
+}

@@ -314,7 +314,7 @@ function chatPanel(room,channel){
   let entries=(room.messages||[]).filter(m=>(m.channel||'public')===channel).map(m=>{
     const at=m.at||m.createdAt||0;
     if(m.system)return {at,html:`<div class="system-message">${escape(m.text)}</div>`};
-    const seat=m.seat??(g?.players||room.players).find(p=>p.id===m.playerId)?.seat;
+    const seat=m.seat;
     return {at,html:`<div class="chat-message ${isWolf?'wolf-message':''}"><strong>${seat?`${escape(seat)} 号 `:''}${escape(m.name||m.playerName||'玩家')}</strong> ${escape(m.text)}</div>`};
   });
   if(!isWolf)entries=entries.concat((g?.log||[]).map(l=>({at:l.at,html:`<div class="system-message">${escape(l.text)}</div>`}))).sort((a,b)=>a.at-b.at);

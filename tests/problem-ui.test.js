@@ -413,9 +413,11 @@ test('empty seats accept seat requests; spectators can navigate between games an
   const publicView=gameView({myRole:null,submitted:false,action:null,actionable:false});
   ui.app.state.memberships=[{code:'123456',name:'原来的房间'},{code:'456789',name:'新房间'}];
   ui.putInRoom(publicView,{isSpectator:true,messages:[
-    {system:true,at:1,text:'小张加入观战席。'},{playerId:'target',name:'目标玩家',at:2,text:'大家好'}]});
+    {system:true,at:1,text:'小张加入观战席。'},{playerId:'target',name:'目标玩家',seat:4,at:2,text:'大家好'},
+    {playerId:'target',name:'目标玩家',seat:null,at:3,text:'旧座号未知'}]});
   await ui.click({sidebarToggle:'discussion'});
-  assert.match(ui.html(),/小张加入观战席/);assert.match(ui.html(),/2 号 目标玩家<\/strong> 大家好/);
+  assert.match(ui.html(),/小张加入观战席/);assert.match(ui.html(),/4 号 目标玩家<\/strong> 大家好/);
+  assert.match(ui.html(),/<strong>目标玩家<\/strong> 旧座号未知/);
   assert.doesNotMatch(ui.html(),/id="draft-public"|data-seat=|data-target=|data-do="ready"/);
   assert.match(ui.html(),/data-do="leave"/);assert.match(ui.html(),/id="switch-room"/);
   await ui.click({page:'lobby'});
