@@ -1,5 +1,5 @@
 import {STANDARD_CONFIG, ROLE_INFO, isWolfRole, roleLimit, validateConfig, createGame, viewGame, act, advance} from './engine.js';
-import {PROBLEM_TITLE, PROBLEM_CONTENT_HTML} from './problem-content.js';
+import {PROBLEM_TITLE, PROBLEM_CONTENT_HTML, PROBLEM_SAMPLES} from './problem-content.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -112,9 +112,16 @@ function syncActionKey(room){
 function gameArea(room, awayNotice) {
   const open = state.gameAreaOpen;
   return `<div class="lg-game-fold">
-    <button type="button" id="toggle-game-area" class="lg-disclosure lg-game-disclosure"
+    <button type="button" id="toggle-game-area" class="lg-game-disclosure"
       data-do="toggle-game-area" aria-expanded="${open}" aria-controls="game-area-content">
-      <span class="lg-disclosure-arrow" aria-hidden="true"></span>${open ? '收起游戏区域' : '展开游戏区域'}
+      <svg class="lg-callout-info-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <circle cx="8" cy="8" r="8" fill="currentColor"/>
+        <g fill="white"><circle cx="8" cy="4.9" r="1.1"/><path d="M6.4 7h2.7v3.8h.9V12H6.3v-1.2h.9V8.2h-.8z"/></g>
+      </svg>
+      <span>游戏区域</span>
+      <svg class="lg-callout-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path fill="currentColor" d="M6 3.5a1 1 0 0 1 1.7-.7l4.5 4.5a1 1 0 0 1 0 1.4l-4.5 4.5a1 1 0 0 1-1.7-.7z"/>
+      </svg>
     </button>
     <div id="game-area-content" class="lg-game-content"${open ? '' : ' hidden'}>${open ? awayNotice + (room ? roomBackground(room) : lobbyBackground()) : ''}</div>
   </div>`;
@@ -276,6 +283,65 @@ function captureCodeEditor(){
   state.codeDraft=editor.value;storage.set('codeDraft',state.codeDraft);
   state.codeSelection={start:editor.selectionStart??0,end:editor.selectionEnd??0,top:editor.scrollTop||0,left:editor.scrollLeft||0};
 }
+const sampleCopyTimers = new Map();
+function setSampleCopyStatus(button, id, copied) {
+  clearTimeout(sampleCopyTimers.get(id));
+  sampleCopyTimers.delete(id);
+  const label = copied ? '复制成功' : '复制';
+  button.textContent = label;
+  const current = document.getElementById(id);
+  if (current && current !== button) current.textContent = label;
+  if (!copied) return;
+  const timer = setTimeout(() => {
+    if (sampleCopyTimers.get(id) !== timer) return;
+    sampleCopyTimers.delete(id);
+    const visible = document.getElementById(id) || button;
+    visible.textContent = '复制';
+  }, 1000);
+  sampleCopyTimers.set(id, timer);
+}
+
+async function copySample(button) {
+  const number = Number(button.dataset.sampleNumber);
+  const part = button.dataset.samplePart;
+  const sample = PROBLEM_SAMPLES[number - 1];
+  if (!Number.isInteger(number) || !sample || !['input', 'output'].includes(part)) return;
+  const text = sample[part];
+  const id = `copy-sample-${part}-${number}`;
+  const label = `${part === 'input' ? '输入' : '输出'}样例 #${number}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    setSampleCopyStatus(button, id, true);
+    return;
+  } catch {
+    // A browser can allow a selection copy even when the Clipboard API is denied.
+  }
+
+  try {
+    const code = button.closest('.problem-sample-block')?.querySelector('code');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if (selection.toString() === text && document.execCommand('copy')) {
+      setSampleCopyStatus(button, id, true);
+      return;
+    }
+  } catch {
+    // The readonly field below also works when programmatic copying is unavailable.
+  }
+
+  setSampleCopyStatus(button, id, false);
+  modal(`复制${label}`, `<label class="field"><span>请按 Ctrl+C、⌘C 或使用系统复制菜单</span><textarea id="sample-copy-text" class="input" rows="8" aria-label="${label}" readonly></textarea></label>`);
+  const field = document.getElementById('sample-copy-text');
+  if (field) {
+    field.value = text;
+    // Run after the modal's initial focus so keyboard users can copy immediately.
+    setTimeout(() => { if (field.isConnected) { field.focus(); field.select(); } }, 0);
+  }
+}
+
 async function copyCode(){
   captureCodeEditor();
   try{await navigator.clipboard.writeText(state.codeDraft);toast('代码已复制');}
@@ -461,6 +527,10 @@ function render(){
     syncChildren(root, template.content);
   } else {
     root.innerHTML = html;
+  }
+  for (const id of sampleCopyTimers.keys()) {
+    const button = document.getElementById(id);
+    if (button) button.textContent = '复制成功';
   }
   updateClock();
   const field = focused?.id && document.getElementById(focused.id);
@@ -757,6 +827,7 @@ document.addEventListener('click',async event=>{
     }
     return;
   }
+  if (b.dataset.do === 'copy-sample') { await copySample(b); return; }
   if(b.dataset.do==='copy-code'){await copyCode();return;}
   if(b.dataset.page){event.preventDefault();await navigate(b.dataset.page);return;}
   if(b.dataset.count){const r=b.dataset.count;state.config.roles[r]=Math.max(0,Math.min(roleLimit(r),(state.config.roles[r]??0)+Number(b.dataset.delta)));updateCounts();return;}

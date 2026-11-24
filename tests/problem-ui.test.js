@@ -13,7 +13,7 @@ const source = (await readFile(new URL('../web/app.js', import.meta.url), 'utf8'
 const reply = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 const json = value => JSON.parse(JSON.stringify(value));
 
-async function frontend(savedStorage = new Map()) {
+async function frontend(savedStorage = new Map(), { writeClipboard, scheduleTimeout = () => 0, cancelTimeout = () => {} } = {}) {
   const elements = new Map(), callbacks = new Map(), calls = [], copied = [], navigations = [];
   let serverRoom = null;
   const el = () => ({ innerHTML: '', textContent: '', value: '', checked: false, dataset: {},
@@ -34,7 +34,7 @@ async function frontend(savedStorage = new Map()) {
     localStorage: { getItem: key => savedStorage.get(key) ?? null, setItem: (key, value) => savedStorage.set(key, String(value)) },
     sessionStorage: { getItem() { return null; }, setItem() {} },
     window: { MOONWOLF_CONFIG: { apiBase: '' }, addEventListener() {}, scrollTo() {} },
-    navigator: { clipboard: { async writeText(text) { copied.push(text); } } },
+    navigator: { clipboard: { writeText: writeClipboard ?? (async text => { copied.push(text); }) } },
     fetch: async (url, options = {}) => {
       const {pathname:path,search}=new URL(url,location.href);
       const body=options.body&&JSON.parse(options.body);
@@ -49,16 +49,16 @@ async function frontend(savedStorage = new Map()) {
           path === '/api/room' ? { room: serverRoom } : path === '/api/rooms' ? { rooms: [] } :
             path === '/api/history' ? { history: [] } : path === '/api/stats' ? { standings: [] } : {});
     },
-    setTimeout: () => 0, clearTimeout() {}, setInterval() {},
+    setTimeout: scheduleTimeout, clearTimeout: cancelTimeout, setInterval() {},
   });
   vm.runInContext(source, context, { filename: 'app.js' });
   const app = context.frontend;
   await app.waitForConnect();
-  const click = async dataset => {
-    const button = { dataset, disabled: false, isConnected: true };
+  const clickButton = async button => {
     await callbacks.get('click')({ target: { closest: () => button }, preventDefault() {} });
     return button;
   };
+  const click = (dataset, properties = {}) => clickButton({ dataset, disabled: false, isConnected: true, ...properties });
   const field = (id, properties = {}) => {
     const element = { ...el(), id, ...properties };
     elements.set('#' + id, element);
@@ -81,7 +81,7 @@ async function frontend(savedStorage = new Map()) {
     app.render();
   };
   return { app, elements, calls, copied, navigations, location, document, storage: savedStorage,
-    click, field, edit, submit, putInRoom, window:context.window, html: () => elements.get('#app').innerHTML,
+    click, clickButton, field, edit, submit, putInRoom, window:context.window, html: () => elements.get('#app').innerHTML,
     setServerRoom: room => { serverRoom = json(room); } };
 }
 
@@ -549,16 +549,35 @@ test('a room poll appends to the mounted feed without interim scroll, detach, or
 
 test('the background game disclosure keeps lobby, seats, phase prompts and AFK controls together', async () => {
   const ui = await frontend();
-  const open = () => /data-do="toggle-game-area" aria-expanded="true" aria-controls="game-area-content"/.test(ui.html());
-  assert.ok(open());
-  assert.match(ui.html(), /type="button" id="toggle-game-area"/);
+  function checkDisclosure(expanded) {
+    const button=ui.html().match(/(<button\b(?=[^>]*\bid="toggle-game-area")[^>]*>)([\s\S]*?)<\/button>/);
+    assert.ok(button,'game disclosure is a native button');
+    const [,tag,content]=button;
+    assert.match(tag,/type="button"/);
+    assert.match(tag,/class="[^"]*\blg-game-disclosure\b[^"]*"/);
+    assert.match(tag,/data-do="toggle-game-area"/);
+    assert.match(tag,/aria-controls="game-area-content"/);
+    assert.ok(tag.includes('aria-expanded="'+expanded+'"'));
+    assert.doesNotMatch(tag+content,/收起游戏区域|展开游戏区域/);
+    const icon=content.match(/<[^/!][^>]*\bclass="[^"]*\blg-callout-info-icon\b[^"]*"[^>]*>/);
+    const caret=content.match(/<[^/!][^>]*\bclass="[^"]*\blg-callout-caret\b[^"]*"[^>]*>/);
+    const title=content.match(/(?:^|>)\s*游戏区域\s*(?=<|$)/);
+    assert.ok(icon&&title&&caret,'information icon, visible title, and disclosure caret');
+    assert.match(icon[0],/aria-hidden="true"/);
+    assert.match(caret[0],/aria-hidden="true"/);
+    assert.ok(icon.index<title.index&&title.index<caret.index,'title follows the icon and precedes the caret');
+    const region=ui.html().match(/<div\b(?=[^>]*\bid="game-area-content")[^>]*>/);
+    assert.ok(region);
+    assert.equal(/\shidden(?:[\s=>])/.test(region[0]),!expanded);
+  }
+  const sidebarOpen=key=>ui.html().includes('data-sidebar-toggle="'+key+'" aria-expanded="true"');
+  checkDisclosure(true);
   assert.match(ui.html(), /data-do="match"/);
   let focused = 0;
   ui.field('toggle-game-area', {focus(options) { assert.equal(options.preventScroll,true); focused++; }});
   await ui.click({do:'toggle-game-area'});
   assert.equal(focused,1);
-  assert.equal(open(),false);
-  assert.match(ui.html(), /id="game-area-content" class="lg-game-content" hidden><\/div>/);
+  checkDisclosure(false);
   assert.doesNotMatch(ui.html(), /data-do="match"|data-do="join-modal"|data-do="create"|class="seats"/);
   assert.match(ui.html(), /题目背景[\s\S]*?本题为交互题/);
   assert.match(ui.html(), /class="lg-statement|lg-statement-connected/);
@@ -568,21 +587,186 @@ test('the background game disclosure keeps lobby, seats, phase prompts and AFK c
   const view = gameView({myAfk:true,canSpeak:false});
   ui.putInRoom(view);
   await ui.click({sidebarToggle:'discussion'});
+  await ui.click({sidebarToggle:'recommendations'});
+  checkDisclosure(false);
+  assert.ok(sidebarOpen('discussion')&&sidebarOpen('recommendations')&&!sidebarOpen('tags'));
   const changed = json(ui.app.state.room);
   changed.game.phase = 'discussion';
   changed.messages.push({name:'玩家',seat:2,text:'折叠期间收到的发言',at:Date.now()});
   ui.setServerRoom(changed);
   await ui.app.refreshData();
-  assert.equal(open(),false);
+  checkDisclosure(false);
   assert.doesNotMatch(ui.html(), /class="seats"|class="room-status"|data-do="return"/);
   assert.match(ui.html(), /折叠期间收到的发言/);
   await ui.click({problemTab:'submit'});
   assert.match(ui.html(), /id="code-editor"/);
   await ui.click({problemTab:'description'});
-  assert.equal(open(),false);
+  checkDisclosure(false);
   await ui.click({do:'toggle-game-area'});
-  assert.ok(open());
+  checkDisclosure(true);
   assert.match(ui.html(), /class="seats"/);
   assert.match(ui.html(), /data-do="return">回到游戏/);
   assert.match(ui.html(), /class="room-status"/);
+  assert.ok(sidebarOpen('discussion')&&sidebarOpen('recommendations')&&!sidebarOpen('tags'));
+  await ui.click({sidebarToggle:'discussion'});
+  checkDisclosure(true);
+  assert.ok(!sidebarOpen('discussion')&&sidebarOpen('recommendations'));
+});
+
+function sampleButtons(html) {
+  const buttons = [];
+  for (const [, block] of html.matchAll(/<div class="problem-sample-block"[^>]*>([\s\S]*?)<\/pre>/g)) {
+    const [, attrs, text] = block.match(/<button\b([^>]*\bdata-do="copy-sample"[^>]*)>([^<]*)<\/button>/) ?? [];
+    assert.ok(attrs, 'each visible sample block has its own copy button');
+    assert.equal(text, '复制');
+    const attr = name => attrs.match(new RegExp('\\b' + name + '="([^"]+)"'))?.[1];
+    const number = attr('data-sample-number'), part = attr('data-sample-part');
+    const label = (part === 'input' ? '输入' : '输出') + ' #' + number;
+    assert.ok(block.includes(label), 'visible label must match the button’s sample');
+    assert.equal(attr('aria-label'), '复制' + (part === 'input' ? '输入' : '输出') + '样例 #' + number);
+    const code = block.match(/<code\b[^>]*>([\s\S]*?)<\/code>/)?.[1];
+    assert.ok(code, 'copy must target a visible nonempty example');
+    buttons.push({ id: attr('id'), textContent: text, number, part, code, dataset: { do: 'copy-sample', sampleNumber: number, samplePart: part } });
+  }
+  return buttons;
+}
+
+test('each numbered sample copies exactly its own displayed multiline input or output', async () => {
+  const ui = await frontend(), buttons = sampleButtons(ui.html());
+  assert.deepEqual(buttons.map(b => [b.number, b.part]), [['1','input'], ['1','output'], ['2','input'], ['2','output']]);
+  const requests = ui.calls.length;
+  for (const button of buttons) {
+    const expected = problem.PROBLEM_SAMPLES[Number(button.number) - 1][button.part];
+    assert.equal(button.code, expected, 'rendered sample and authoritative problem text must match');
+    assert.ok(expected.endsWith('\n') && expected.trimEnd().includes('\n'));
+    const element = ui.field(button.id, { ...button, isConnected: true, disabled: false });
+    await ui.clickButton(element);
+    assert.equal(ui.copied.at(-1), expected, 'copy must preserve spaces, line breaks and the final newline');
+    assert.equal(element.textContent, '复制成功');
+    assert.equal(element.disabled, false);
+    assert.equal(ui.elements.get('#toast').textContent, '');
+  }
+  assert.equal(ui.copied.length, buttons.length);
+  assert.equal(ui.calls.length, requests, 'copying an example must not send any game or judging request');
+});
+
+for (const mode of ['selection copy succeeds', 'selection copy denied', 'selection omits final newline']) {
+  test('sample clipboard permission denied: ' + mode, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const attempts = [], commands = [];
+    const ui = await frontend(new Map(), {
+      async writeClipboard(text) {
+        attempts.push(text);
+        throw new Error('NotAllowedError');
+      },
+      scheduleTimeout: setTimeout, cancelTimeout: clearTimeout,
+    });
+    const example = sampleButtons(ui.html()).find(b => b.number === '2' && b.part === 'input');
+    const code = { textContent: example.code };
+    let range, focused = false, selectedAll = false;
+    const selection = {
+      removeAllRanges() { range = undefined; },
+      addRange(next) { range = next; },
+      toString() {
+        const text = range?.node?.textContent ?? '';
+        return mode === 'selection omits final newline' ? text.trimEnd() : text;
+      },
+    };
+    ui.window.getSelection = () => selection;
+    ui.document.createRange = () => ({ selectNodeContents(node) { this.node = node; } });
+    ui.document.execCommand = name => {
+      commands.push([name, selection.toString()]);
+      return mode === 'selection copy succeeds';
+    };
+    const manual = ui.field('sample-copy-text', {
+      isConnected: true,
+      focus() { focused = true; },
+      select() { selectedAll = focused && this.value === example.code; },
+    });
+    const button = ui.field(example.id, {
+      ...example, disabled: false, isConnected: true,
+      closest: selector => selector === '.problem-sample-block'
+        ? { querySelector: tag => tag === 'code' ? code : null }
+        : null,
+    });
+    await ui.clickButton(button);
+    assert.equal(button.disabled, false);
+    assert.equal(ui.elements.get('#toast').textContent, '');
+    assert.deepEqual(attempts, [example.code]);
+    assert.deepEqual(commands, mode === 'selection omits final newline' ? [] : [['copy', example.code]]);
+    if (mode === 'selection copy succeeds') {
+      assert.equal(button.textContent, '复制成功');
+      t.mock.timers.tick(999);
+      assert.equal(button.textContent, '复制成功');
+      t.mock.timers.tick(1);
+      assert.equal(button.textContent, '复制');
+      assert.equal(ui.app.state.modal, null);
+    } else {
+      assert.equal(button.textContent, '复制');
+      assert.match(ui.elements.get('#modal-root').innerHTML, /<textarea\b[^>]*id="sample-copy-text"[^>]*readonly/);
+      t.mock.timers.tick(0);
+      assert.equal(manual.value, example.code);
+      assert.equal(selectedAll, true, 'the complete original sample is focused and selected for manual copy');
+    }
+  });
+}
+
+test('sample copy feedback is independent, survives a room update, and restarts on a second click', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ui = await frontend(new Map(), { scheduleTimeout: setTimeout, cancelTimeout: clearTimeout });
+  ui.putInRoom(gameView());
+  ui.app.state.sidebar.discussion = true;
+  ui.app.render();
+  const samples = sampleButtons(ui.html());
+  const mount = sample => ui.field(sample.id, { ...sample, disabled: false, isConnected: true });
+  const buttons = samples.map(mount);
+  const copy = i => ui.clickButton(buttons[i]);
+  const labels = () => buttons.map(b => b.textContent);
+  const waiting = '复制', success = '复制成功';
+  ui.elements.get('#toast').textContent = '其他通知';
+  await copy(0);
+  assert.deepEqual(labels(), [success, waiting, waiting, waiting]);
+  t.mock.timers.tick(250);
+  await copy(1);
+  t.mock.timers.tick(500);
+  assert.ok(buttons.every(b => !b.disabled));
+  await copy(0);
+  assert.deepEqual(ui.copied, [samples[0].code, samples[1].code, samples[0].code]);
+  t.mock.timers.tick(250);
+  assert.deepEqual(labels(), [success, success, waiting, waiting], 'first click timeout was superseded');
+  for (const [i, sample] of samples.entries()) {
+    buttons[i].isConnected = false;
+    buttons[i] = mount(sample);
+  }
+  ui.putInRoom(gameView(), { messages: [{ text: '房间刷新', system: true, at: Date.now() }] });
+  assert.ok(ui.html().includes('房间刷新'));
+  assert.deepEqual(labels(), [success, success, waiting, waiting], 'replacing the buttons preserves each active confirmation');
+  t.mock.timers.tick(250);
+  assert.deepEqual(labels(), [success, waiting, waiting, waiting]);
+  t.mock.timers.tick(499);
+  assert.deepEqual(labels(), [success, waiting, waiting, waiting]);
+  t.mock.timers.tick(1);
+  assert.deepEqual(labels(), [waiting, waiting, waiting, waiting]);
+  assert.equal(ui.elements.get('#toast').textContent, '其他通知');
+});
+
+test('a failed repeat copy clears only its own earlier success message', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let denied = false;
+  const ui = await frontend(new Map(), {
+    async writeClipboard() { if (denied) throw new Error('NotAllowedError'); },
+    scheduleTimeout: setTimeout, cancelTimeout: clearTimeout,
+  });
+  const [first, second] = sampleButtons(ui.html()).slice(0, 2)
+    .map(sample => ui.field(sample.id, { ...sample, disabled: false, isConnected: true, closest: () => null }));
+  await ui.clickButton(first);
+  await ui.clickButton(second);
+  assert.equal(first.textContent, '复制成功');
+  denied = true;
+  await ui.clickButton(first);
+  assert.equal(first.textContent, '复制');
+  assert.equal(second.textContent, '复制成功');
+  assert.equal(first.disabled, false);
+  assert.equal(ui.elements.get('#toast').textContent, '');
+  assert.match(ui.elements.get('#modal-root').innerHTML, /sample-copy-text/);
 });

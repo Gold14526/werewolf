@@ -181,27 +181,37 @@ body {
 .lg-background { overflow: visible; margin-bottom: 0; padding-bottom: 20px; border-radius: 4px 4px 0 0; box-shadow: 0 -1px 5px #27364a04; }
 .lg-background + .lg-statement { border-radius: 0 0 4px 4px; padding-top: 12px; }
 .lg-background-intro { margin: -4px 0 12px; color: #555; font-size: 14px; }
-/* Disclosure within the problem background, separate from the sidebar panels. */
+/* Luogu Markdown's info callout inside the problem statement. */
 .lg-game-fold {
+  --callout-accent: #3498db;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #dce2e8;
-  border-radius: 4px;
+  margin-block: 1em;
+  border-left: 5px solid var(--callout-accent);
+  background: #fff;
 }
-.lg-game-fold > .lg-game-disclosure {
-  justify-content: flex-start;
-  gap: 10px;
-  min-height: 36px;
+.lg-game-disclosure {
+  display: flex;
+  align-items: center;
+  gap: .5em;
+  width: 100%;
+  min-height: 40px;
   margin: 0;
-  padding: 6px 12px;
-  border-radius: 3px;
-  background: #f6f8fa;
+  padding: .5em 1em;
+  border: 0;
+  background: transparent;
+  color: var(--callout-accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
   text-align: left;
 }
+.lg-callout-info-icon, .lg-callout-caret { flex: none; width: 1em; height: 1em; }
+.lg-callout-caret { margin-left: auto; }
+.lg-game-disclosure[aria-expanded="true"] .lg-callout-caret { transform: rotate(90deg); }
 .lg-game-content {
   min-width: 0;
-  padding: clamp(6px, 1vw, 12px);
-  border-top: 1px solid #e1e5ec;
+  padding: 8px 16px;
 }
 .lg-game-content[hidden] { display: none; }
 .lg-game-content .lg-game-toolbar > label,
@@ -312,10 +322,13 @@ body {
 .lg-statement :is(th, td) { padding: 8px; border: 1px solid #ddd; text-align: left; }
 .lg-statement th { background: #fafafa; font-weight: 500; }
 .lg-statement .problem-section + .problem-section { margin-top: 28px; }
-.lg-statement .problem-sample { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 14px 0; }
-.lg-statement .problem-sample-block { display: flex; min-width: 0; flex-direction: column; }
-.lg-statement .problem-sample-label { margin: 0; font-size: 14px; font-weight: 500; }
-.lg-statement .problem-sample pre { flex: 1; margin-bottom: 0; }
+.lg-statement .problem-sample { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+.lg-statement .problem-sample-block { min-width: 0; margin: 8px 4px; }
+.lg-statement .problem-sample-heading { margin: 7px 0; }
+.lg-statement .problem-sample-label { margin: 0; color: #8c8c8c; font-size: 14px; font-weight: 700; line-height: 21px; }
+.lg-statement .problem-sample-copy { float: right; padding: .125em .5em; border: 1px solid #3498db; border-radius: 3px; background: transparent; color: #3498db; cursor: pointer; font: inherit; font-size: 12.25px; line-height: 1.5; }
+.lg-statement .problem-sample-copy:hover { background: rgb(52 152 219 / 10%); text-decoration: none; }
+.lg-statement .problem-sample pre { margin: 0; padding: 5.25px 7px; border: 1px solid #f0f0f0; border-radius: 2px; background: #fafafa; color: #1f1f1f; font-size: 14px; line-height: 21px; }
 
 .lg-sidebar .lg-card { padding: 20.8px; }
 .lg-sidebar h3 { font-size: 18px; }
@@ -512,7 +525,7 @@ body {
   .lg-background .controls .btn svg { width: 12px; height: 12px; }
   .lg-statement { font-size: 14px; }
   .lg-statement pre { padding: 10px; font-size: 12px; }
-  .lg-statement .problem-sample { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .lg-statement .problem-sample { grid-template-columns: minmax(0, 1fr); }
   .lg-code-toolbar { gap: 8px; }
   .lg-code-toolbar .input { flex: 1 1 140px; width: auto; min-width: 0; }
   .lg-code-toolbar > .btn:last-child { margin-left: 0; }
