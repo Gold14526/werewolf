@@ -11,6 +11,7 @@ const sessionStore = {get(key){try{return sessionStorage.getItem(`moonwolf:${key
 const defaultApi = (window.MOONWOLF_CONFIG?.apiBase || '').replace(/\/+$/, '');
 const state = {
   problemTab:'description', submitTab:'code', codeDraft:storage.get('codeDraft',''), codeLanguage:storage.get('codeLanguage','cpp17'), codeSelection:{start:0,end:0,top:0,left:0},
+  sidebar:{tags:false, discussion:false, recommendations:false}, identityScope:null, adDismissed:false,
   page:'lobby', name:storage.get('name','玩家'+Math.floor(1000+Math.random()*9000)),
   apiBase:(storage.get('apiBase') || defaultApi).replace(/\/+$/,''),
   token:'', player:null, online:false, checking:true, room:null, rooms:[], history:[], standings:[],
@@ -45,12 +46,54 @@ function rules(){return `<ol class="rules-list">
 </ol>`;}
 
 function uiIcon(name){
-  const paths={home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',problem:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/>',history:'<path d="M4 5h16v16H4zM8 2v6M16 2v6M4 10h16M8 14h3M8 17h7"/>',rules:'<path d="M12 6c-3-3-7-2-9-1v15c3-2 6-2 9 0 3-2 6-2 9 0V5c-2-1-6-2-9 1zM12 6v14"/>',settings:'<path d="m10 2-.6 2.5-2.1 1.2L4.8 5l-2 3.5 1.9 1.8v2.4l-1.9 1.8 2 3.5 2.5-.7 2.1 1.2.6 2.5h4l.6-2.5 2.1-1.2 2.5.7 2-3.5-1.9-1.8v-2.4l1.9-1.8-2-3.5-2.5.7-2.1-1.2L14 2z"/><circle cx="12" cy="11.5" r="3"/>',submit:'<path d="M5 3h10l4 4v7M14 3v5h5M5 3v18h7M17 14v8M13 18l4-4 4 4"/>',copy:'<rect x="8" y="8" width="12" height="13" rx="1"/><path d="M16 8V3H4v13h4"/>'};
+  const paths={
+    school:'<path d="m2 9 10-5 10 5-10 5zM5 11v6l7 4 7-4v-6M22 9v8"/>',
+    training:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3h6v4H9zM9 11h6M9 15h4"/>',
+    contest:'<path d="M3 20v-2M7 20v-5M11 20v-8M15 20V9M19 20V5"/>',
+    record:'<path d="M20.8 15a9 9 0 1 1-11-12v10zM13 2.6c4.5.5 7.8 3.6 8.3 8.4H13z"/>',
+    forum:'<path d="M14.5 13c2.1-1.2 3.5-3 3.5-5 0-3.1-3.5-5.5-7.8-5.5S2.5 4.9 2.5 8c0 1.7 1 3.2 2.8 4.3L4 15.5l4.5-2.1c.7.1 1.3.2 2 .2"/><path d="M16.6 10.5c3.1.8 5.1 2.7 5.1 5 0 1.4-.8 2.8-2.4 3.8l.8 2.3-3.8-1.3c-3.8 0-6.8-2.1-6.8-4.8 0-1 .4-2 1.3-2.8"/>',
+    article:'<rect x="5" y="3" width="16" height="17" rx="2"/><path d="M2 7v12c0 1.1.9 2 2 2M8 7h4v4H8zM15 7h3M15 10h3M8 14h10M8 17h8"/>',
+    search:'<circle cx="10.5" cy="10.5" r="6.7"/><path d="m16 16 5 5"/>',
+    adjust:'<path d="M3 6h6m4 0h8M3 12h12m4 0h2M3 18h3m4 0h11"/><circle cx="11" cy="6" r="2"/><circle cx="17" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>',
+    home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',problem:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/>',history:'<path d="M4 5h16v16H4zM8 2v6M16 2v6M4 10h16M8 14h3M8 17h7"/>',rules:'<path d="M12 6c-3-3-7-2-9-1v15c3-2 6-2 9 0 3-2 6-2 9 0V5c-2-1-6-2-9 1zM12 6v14"/>',settings:'<path d="m10 2-.6 2.5-2.1 1.2L4.8 5l-2 3.5 1.9 1.8v2.4l-1.9 1.8 2 3.5 2.5-.7 2.1 1.2.6 2.5h4l.6-2.5 2.1-1.2 2.5.7 2-3.5-1.9-1.8v-2.4l1.9-1.8-2-3.5-2.5.7-2.1-1.2L14 2z"/><circle cx="12" cy="11.5" r="3"/>',submit:'<path d="M5 3h10l4 4v7M14 3v5h5M5 3v18h7M17 14v8M13 18l4-4 4 4"/>',copy:'<rect x="8" y="8" width="12" height="13" rx="1"/><path d="M16 8V3H4v13h4"/>'};
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">${paths[name]||paths.problem}</svg>`;
 }
-function shell(content){return `<aside class="lg-rail" aria-label="主导航"><button data-page="lobby" class="${state.page==='lobby'?'active':''}" aria-label="首页" title="首页"><span class="lg-rail-icon">${uiIcon('home')}</span><small>首页</small></button><button data-page="room" class="${state.page==='room'?'active':''}" aria-label="题库与我的房间" title="题库与我的房间"><span class="lg-rail-icon">${uiIcon('problem')}</span><small>题库</small></button><button data-page="history" class="${state.page==='history'?'active':''}" aria-label="对局记录" title="对局记录"><span class="lg-rail-icon">${uiIcon('history')}</span><small>记录</small></button><button data-page="rules" class="${state.page==='rules'?'active':''}" aria-label="游戏规则" title="游戏规则"><span class="lg-rail-icon">${uiIcon('rules')}</span><small>规则</small></button><button data-do="settings" aria-label="联机设置" title="联机设置"><span class="lg-rail-icon">${uiIcon('settings')}</span><small>设置</small></button></aside>
-  <header class="lg-topbar"><button class="lg-topbar-brand" data-page="lobby" aria-label="题目首页"><img src="./assets/luogu.ico" alt="洛谷" width="36" height="36"></button><div class="lg-breadcrumb"><button class="link-button" data-page="lobby">题目列表</button><span aria-hidden="true"> / </span><span>P4899</span></div><button class="account" data-do="profile"><span class="lg-profile-avatar">${escape(state.name.slice(0,1))}</span>${escape(state.name)}</button></header>
-  <div class="lg-page">${connectionBanner()}${content}<footer class="footer">P4899 · [IOI 2018] werewolf 狼人 <button class="link-button" data-page="rules">规则说明</button></footer></div>`;}
+const ORIGINAL_PROBLEM_URL = 'https://www.luogu.com.cn/problem/P4899';
+
+const railItems = [
+  {label: '首页', icon: 'home', page: 'lobby'},
+  {label: '题库与我的房间', icon: 'problem', page: 'room'},
+  {label: '网校', icon: 'school', href: 'https://class.luogu.com.cn/'},
+  {label: '训练题单', icon: 'training', href: 'https://www.luogu.com.cn/training/list'},
+  {label: '比赛', icon: 'contest', href: 'https://www.luogu.com.cn/contest/list'},
+  {label: '对局记录', icon: 'record', page: 'history'},
+  {label: '讨论区', icon: 'forum', href: 'https://www.luogu.com.cn/discuss', divider: true},
+  {label: '文章广场', icon: 'article', href: 'https://www.luogu.com.cn/article'},
+];
+
+function railControl(item) {
+  const contents = `<span class="lg-rail-icon">${uiIcon(item.icon)}</span><small>${item.label}</small>`;
+  if (item.href) {
+    const label = '前往洛谷' + item.label;
+    return `${item.divider ? '<hr class="lg-rail-divider">' : ''}<a href="${item.href}" target="_blank" rel="noopener noreferrer" aria-label="${label}" title="${label}">${contents}</a>`;
+  }
+  return `<button data-page="${item.page}" class="${state.page === item.page ? 'active' : ''}" aria-label="${item.label}" title="${item.label}">${contents}</button>`;
+}
+
+function shell(content) {
+  return `<aside class="lg-rail" aria-label="主导航">${railItems.map(railControl).join('')}</aside>
+    <header class="lg-topbar">
+      <button class="lg-topbar-brand" data-page="lobby" aria-label="题目首页"><img src="./assets/luogu.ico" alt="洛谷" width="36" height="36"></button>
+      <div class="lg-breadcrumb"><button class="link-button" data-page="lobby">题目列表</button><span aria-hidden="true">/</span><span>P4899</span></div>
+      <div class="lg-topbar-tools">
+        <a href="https://www.luogu.com.cn/problem/list" target="_blank" rel="noopener noreferrer" aria-label="在洛谷搜索题目" title="在洛谷搜索题目">${uiIcon('search')}</a>
+        <button data-page="rules" aria-label="游戏规则" title="游戏规则">${uiIcon('rules')}</button>
+        <button data-do="settings" aria-label="联机设置" title="联机设置">${uiIcon('adjust')}</button>
+        <button class="account" data-do="profile" aria-label="玩家昵称：${escape(state.name)}" title="${escape(state.name)}"><span class="lg-profile-avatar">${escape(state.name.slice(0,1))}</span></button>
+      </div>
+    </header>
+    <div class="lg-page">${connectionBanner()}${content}<footer class="footer">P4899 · [IOI 2018] werewolf 狼人 <button class="link-button" data-page="rules">规则说明</button></footer></div>`;
+}
 
 function historyTable(list,empty='暂无已结束的对局'){return `<div class="table-wrap"><table class="table"><thead><tr><th>对局</th><th>结果</th><th>天数</th><th>结束时间</th></tr></thead><tbody>${list.length?list.map(g=>`<tr><td><button class="link-button history-link" data-history="${escape(g.code)}">#${escape(g.code)}</button>${g.demo?' <small class="muted">试玩</small>':''}</td><td><span class="badge ${g.winner==='wolf'?'wolf':g.winner==='good'?'good':'villager'}">${resultLabel(g.winner)}</span></td><td>${escape(g.round)}</td><td>${formatTime(g.endedAt)}</td></tr>`).join(''):`<tr><td colspan="4" class="empty-row">${empty}</td></tr>`}</tbody></table></div>`;}
 const NIGHT_PHASES=['guard','wolf','seer','witch'];
@@ -61,11 +104,91 @@ function syncActionKey(room){
 }
 function problemPage(room){
   syncActionKey(room);
+  const scope = JSON.stringify([state.apiBase, state.player?.id, state.replay ? 'replay' : 'live', room?.code, room?.game?.myRole]);
+  if (scope !== state.identityScope) {
+    state.sidebar.tags = false;
+    state.identityScope = scope;
+  }
   return `<header class="lg-problem-header"><h1>${escape(PROBLEM_TITLE)}</h1><div class="lg-problem-stats"><span class="lg-stat"><span>提交</span><strong>5.29k</strong></span><span class="lg-stat"><span>通过</span><strong>2.59k</strong></span><span class="lg-stat"><span>时间限制</span><strong>4.00s</strong></span><span class="lg-stat"><span>内存限制</span><strong>537.00MB</strong></span></div></header>
-  <nav class="lg-problem-tabs" aria-label="题目页签"><button class="${state.problemTab==='description'?'active':''}" data-problem-tab="description" aria-pressed="${state.problemTab==='description'}">题目描述</button><button class="${state.problemTab==='submit'?'active':''}" data-problem-tab="submit" aria-pressed="${state.problemTab==='submit'}">提交答案</button></nav>
-  <div class="lg-layout"><main class="lg-main">${state.problemTab==='submit'?submissionView(room):`<section class="lg-card lg-background"><h2>题目背景</h2><p class="lg-background-intro">你是狼人，还是人类？</p>${room?roomBackground(room):lobbyBackground()}</section><article class="lg-card lg-statement lg-statement-connected">${PROBLEM_CONTENT_HTML}</article>`}</main><aside class="lg-sidebar">${problemMeta()}<div class="lg-discussion">${room?chatPanel(room,'public'):`<section class="lg-card chat-card"><div class="card-header"><strong>相关讨论</strong></div><div class="chat-feed"><p class="muted small">加入房间后，这里会显示白天发言与对局记录。</p></div><div class="card-body"><button class="btn primary small" data-do="join-modal">输入房号加入</button></div></section>`}</div></aside></div>`;
+  <nav class="lg-problem-tabs" aria-label="题目页签"><button class="${state.problemTab==='description'?'active':''}" data-problem-tab="description" aria-pressed="${state.problemTab==='description'}">题目描述</button><button class="${state.problemTab==='submit'?'active':''}" data-problem-tab="submit" aria-pressed="${state.problemTab==='submit'}">提交答案</button><span class="lg-header-tools"><button type="button" data-do="copy-problem">复制题目链接</button><a href="${ORIGINAL_PROBLEM_URL}" target="_blank" rel="noopener noreferrer" title="前往洛谷 P4899 原题">查看原题</a></span></nav>
+  <div class="lg-layout"><main class="lg-main">${state.problemTab==='submit'?submissionView(room):`<section class="lg-card lg-background"><h2>题目背景</h2><p class="lg-background-intro">本题为交互题，但在此请提交<strong>完整程序</strong>。</p>${room?roomBackground(room):lobbyBackground()}</section><article class="lg-card lg-statement lg-statement-connected">${PROBLEM_CONTENT_HTML}</article>`}</main><aside class="lg-sidebar">${problemMeta()}${tagsPanel(room)}${discussionPanel(room)}${recommendationsPanel()}${sidebarAd()}</aside></div>`;
 }
-function problemMeta(){return `<section class="lg-card lg-problem-meta"><div class="lg-meta-row"><span>题目编号</span><strong>P4899</strong></div><div class="lg-meta-row"><span>提供者</span><span class="lg-provider">Imagine</span></div><div class="lg-meta-row"><span>难度</span><strong class="lg-difficulty">省选/NOI−</strong></div><div class="lg-meta-row"><span>历史分数</span><span>暂无</span></div><div class="lg-reference-links"><button class="link-button" data-page="history">${uiIcon('history')}<span>查看提交记录</span></button><button class="link-button" data-page="rules">${uiIcon('rules')}<span>查看游戏规则</span></button></div><div class="lg-reference-actions"><button class="btn primary small" data-problem-tab="submit">${uiIcon('submit')}提交答案</button><button class="btn secondary small" data-do="join-modal">加入房间</button></div></section><section class="lg-card lg-problem-tags"><h3>标签</h3><div class="lg-tags"><span class="lg-tag-source">IOI</span><span class="lg-tag-year">2018</span><span class="lg-tag-feature">O2 优化</span></div></section>`;}
+
+function problemMeta() {
+  return `<section class="lg-card lg-problem-meta">
+    <div class="lg-meta-row"><span>题目编号</span><strong>P4899</strong></div>
+    <div class="lg-meta-row"><span>提供者</span><a class="lg-provider" href="https://www.luogu.com.cn/user/50167" target="_blank" rel="noopener noreferrer">Imagine</a></div>
+    <div class="lg-meta-row"><span>难度</span><strong class="lg-difficulty">省选/NOI−</strong></div>
+    <div class="lg-meta-row"><span>历史分数</span><span>暂无</span></div>
+    <div class="lg-reference-links">
+      <button class="link-button" data-page="history">${uiIcon('history')}<span>提交记录</span></button>
+      <a href="https://www.luogu.com.cn/problem/solution/P4899" target="_blank" rel="noopener noreferrer">${uiIcon('rules')}<span>查看题解</span></a>
+      <a href="https://www.luogu.com.cn/ticket?type=problem.general&amp;related=P4899" target="_blank" rel="noopener noreferrer">${uiIcon('problem')}<span>题目反馈</span></a>
+    </div></section>`;
+}
+
+function sideSection(key, cssClass, title, show, hide, body, preview = '') {
+  const open = state.sidebar[key];
+  const controls = `data-sidebar-toggle="${key}" aria-expanded="${open}" aria-controls="sidebar-${key}"`;
+  return `<section class="lg-card lg-side-section ${cssClass}">
+    <div class="lg-side-heading"><h3><button type="button" class="lg-side-title" id="heading-${key}" ${controls}>${title}</button></h3></div>
+    ${preview}
+    <div class="lg-side-content" id="sidebar-${key}"${open ? '' : ' hidden'}>${open ? body() : ''}</div>
+    <button type="button" class="lg-disclosure" id="toggle-${key}" ${controls}><span class="lg-disclosure-arrow" aria-hidden="true"></span>${open ? hide : show}</button>
+  </section>`;
+}
+
+function identityPanel(room) {
+  const game = room?.game;
+  if (!game) return '<p class="muted small">游戏开始后可在此查看自己的身份。</p>';
+  if (state.replay || game.phase === 'finished') {
+    const roles = game.players.filter(p => p.role).map(p => `<li>${p.seat} 号 ${escape(p.name)} · ${badge(p.role)}</li>`).join('');
+    return `<ul class="lg-role-roster">${roles}</ul>`;
+  }
+  if (!game.myRole) return '';
+  const skills = [
+    game.canDuel ? '<button class="btn danger small" data-do="duel">骑士决斗</button>' : '',
+    game.canExplode ? `<button class="btn danger small" data-do="explode">${game.myRole === 'whiteWolfKing' ? '白狼王自爆带人' : '狼人自爆'}</button>` : '',
+  ].join('');
+  return `<div class="lg-personal-role"><strong>你的身份：</strong>${badge(game.myRole)}
+    <p class="small">${escape(ROLE_INFO[game.myRole]?.description)}</p>${privateInfo(game)}
+    ${skills ? `<div class="controls">${skills}</div>` : ''}</div>`;
+}
+
+const problemAlgorithms = [[53, '树状数组'], [68, 'Kruskal 重构树'], [127, '深度优先搜索 DFS'], [233, '可持久化线段树'], [379, '线段树合并']];
+function tagsPanel(room) {
+  const chips = '<div class="lg-tags"><span class="lg-tag-source">IOI</span><span class="lg-tag-year">2018</span><span class="lg-tag-feature">O2优化</span></div>';
+  const contents = () => {
+    const algorithms = problemAlgorithms.map(([id, name]) =>
+      `<a href="https://www.luogu.com.cn/problem/list?tag=${id}" target="_blank" rel="noopener noreferrer">${name}</a>`).join('');
+    return `<div class="lg-tags lg-algorithm-tags">${algorithms}</div>${room ? identityPanel(room) : ''}`;
+  };
+  return sideSection('tags', 'lg-problem-tags', '标签', '显示算法标签', '隐藏算法标签', contents, chips);
+}
+
+function discussionPanel(room) {
+  return sideSection('discussion', 'lg-discussion', '相关讨论', '查看讨论', '收起讨论', () => room
+    ? chatPanel(room, 'public')
+    : '<p class="muted small">加入房间后可在此发言。</p><button class="btn primary small" data-do="join-modal">输入房号加入</button>');
+}
+
+const recommendedProblems = [
+  ['P3684', '[CERC2016] 机棚障碍 Hangar Hurdles'],
+  ['P3302', '[SDOI2013] 森林'],
+  ['P4768', '[NOI2018] 归程'],
+  ['P4898', '[IOI 2018] seats 排座位'],
+  ['P5055', '【模板】可持久化文艺平衡树'],
+];
+function recommendationsPanel() {
+  return sideSection('recommendations', 'lg-recommendations', '推荐题目', '查看推荐', '收起推荐', () =>
+    `<ul class="lg-rec-list">${recommendedProblems.map(([id, title]) =>
+      `<li><a href="https://www.luogu.com.cn/problem/${id}" target="_blank" rel="noopener noreferrer">${id} ${title}</a></li>`).join('')}</ul>`);
+}
+
+function sidebarAd() {
+  if (state.adDismissed) return '';
+  return `<div class="lg-side-ad"><a href="https://help.luogu.com.cn/manual/luogu/commercial-contest" target="_blank" rel="noopener noreferrer"><img src="./assets/luogu-recommended.png" width="400" height="200" alt="洛谷推荐：商业比赛"></a><div class="lg-ad-caption"><span>洛谷推荐</span><button type="button" data-do="dismiss-ad" aria-label="关闭广告">×</button></div></div>`;
+}
 
 function lobby(){return problemPage(null);}
 function lobbyBackground(){return `<div class="seats">${Array.from({length:12},(_,i)=>`<div class="seat empty"><span class="seat-number">${i+1}</span><div class="avatar">＋</div><div class="seat-name muted">等待加入</div></div>`).join('')}</div><div class="lg-game-toolbar"><span class="small muted">默认 12 人标准局 · 6 位随机房号</span><button class="link-button" data-page="rules">玩法说明</button></div><div class="controls">${state.room?'<button class="btn primary" data-page="room">回到我的房间</button>':'<button class="btn primary" data-do="match">开始匹配</button>'}<button class="btn secondary" data-do="create">自选配置开房</button><button class="btn secondary" data-do="join-modal">输入房号加入</button><button class="btn secondary" data-do="demo">本地试玩</button></div><p class="small muted">匹配满 12 人自动开局，自建房由房主在全员准备后开始。</p><details class="lg-public-rooms"><summary>公开房间 · ${state.rooms.length} 个</summary><div class="lg-game-toolbar"><button class="link-button" data-do="refresh">刷新房间</button></div><div class="table-wrap"><table class="table"><thead><tr><th>房号</th><th>房间名</th><th>人数</th><th></th></tr></thead><tbody>${state.rooms.length?state.rooms.map(r=>`<tr><td>${escape(r.code)}</td><td>${escape(r.name)}</td><td>${r.playerCount} / ${r.capacity}</td><td><button class="btn primary small" data-join="${escape(r.code)}">加入</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty-row">暂无等待中的公开房间</td></tr>'}</tbody></table></div></details><details class="lg-public-rooms"><summary>胜场榜</summary><div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>玩家</th><th>胜 / 局</th><th>胜率</th></tr></thead><tbody>${state.standings.length?state.standings.slice(0,20).map((p,i)=>`<tr><td>${i+1}</td><td>${escape(p.name)}</td><td>${p.wins} / ${p.games}</td><td>${(p.games?p.wins/p.games*100:0).toFixed(1)}%</td></tr>`).join(''):'<tr><td colspan="4" class="empty-row">完成第一局后生成战绩</td></tr>'}</tbody></table></div></details>`;}
@@ -83,14 +206,14 @@ function roomBackground(room){
   const game=room.game,myId=state.player?.id,me=room.players.find(p=>p.id===myId),host=room.hostId===myId;
   const players=game?.players||room.players,capacity=size(room.config),current=game?.players.find(p=>p.id===game.currentSpeakerId),voting=['vote','sheriff_vote'].includes(game?.phase);
   return `<div class="lg-game-toolbar"><strong>${state.replay?'对局回放':'房间'} #${escape(room.code)}</strong><div><button class="link-button" data-page="lobby">大厅</button> · <button class="link-button" data-page="history">对局历史</button></div></div>${state.demo&&!state.replay?'<div class="alert warning">本地试玩 · 其余座位为随机行动的电脑玩家。</div>':''}
-  <div class="room-status"><div><strong class="status-title">${game?game.phase==='finished'?resultLabel(game.winner):`第 ${game.round} ${NIGHT_PHASES.includes(game.phase)?'夜':'天'} · ${escape(game.phaseLabel)}`:room.matchmaking?'匹配中，等待玩家加入':'等待玩家准备'}</strong><p class="status-detail">${game?game.phase==='finished'?'游戏结束，所有身份与记录已公开。':current?`当前由 ${current.seat} 号 ${escape(current.name)} ${game.phase==='lastwords'?'发表遗言':'发言'}。`:voting?'点击下方玩家头像选择目标，再确认投票。':NIGHT_PHASES.includes(game.phase)?'夜间行动请打开「提交答案 → 提交文件」。':'请根据身份提示操作，其他玩家等待。':`${escape(room.name)} · ${room.players.length} / ${capacity} 人 · ${room.visibility==='private'?'私密房间':'公开房间'}`}</p></div>${game?.deadline?`<strong class="timer" data-deadline="${game.deadline}"></strong>`:!game?`<div class="controls"><button class="btn secondary small" data-do="copy-room">复制房号</button><button class="btn primary small" data-do="copy-invite">复制邀请链接</button></div>`:''}</div>
+  <div class="room-status"><div><strong class="status-title">${game?game.phase==='finished'?resultLabel(game.winner):`第 ${game.round} ${NIGHT_PHASES.includes(game.phase)?'夜':'天'} · ${escape(game.phaseLabel)}`:room.matchmaking?'匹配中，等待玩家加入':'等待玩家准备'}</strong><p class="status-detail">${game?game.phase==='finished'?'游戏结束，所有身份与记录已公开。':current?`当前由 ${current.seat} 号 ${escape(current.name)} ${game.phase==='lastwords'?'发表遗言':'发言'}。`:voting?'点击下方玩家头像选择目标，再确认投票。':NIGHT_PHASES.includes(game.phase)?'夜间行动请打开「提交答案 → 提交文件」。':'可展开「标签」查看身份和技能。':`${escape(room.name)} · ${room.players.length} / ${capacity} 人 · ${room.visibility==='private'?'私密房间':'公开房间'}`}</p></div>${game?.deadline?`<strong class="timer" data-deadline="${game.deadline}"></strong>`:!game?`<div class="controls"><button class="btn secondary small" data-do="copy-room">复制房号</button><button class="btn primary small" data-do="copy-invite">复制邀请链接</button></div>`:''}</div>
   <div class="seats">${Array.from({length:capacity},(_,i)=>{
     const p=players.find(x=>x.seat===i+1);if(!p)return `<div class="seat empty"><span class="seat-number">${i+1}</span><div class="avatar">＋</div><div class="seat-name muted">等待加入</div></div>`;
     const ready=room.players.find(x=>x.id===p.id)?.ready,selectable=voting&&availableTarget(game,p.id),selected=selectable&&state.target===p.id;
-    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span><span class="seat-role">${p.role?badge(p.role):''}</span><button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${p.alive===false?'<span class="badge villager">出局</span>':game?p.id===game.currentSpeakerId?'<span class="badge good">正在发言</span>':'存活':ready?'<span class="badge good">已准备</span>':'未准备'}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
+    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span><button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${p.alive===false?'<span class="badge villager">出局</span>':game?p.id===game.currentSpeakerId?'<span class="badge good">正在发言</span>':'存活':ready?'<span class="badge good">已准备</span>':'未准备'}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
   }).join('')}</div>${game?sheriffPanel(game):''}
-  ${game?game.myRole&&!state.replay?`<div class="identity">你的身份：${badge(game.myRole)} <span class="small">${escape(ROLE_INFO[game.myRole]?.description)}</span></div>${privateInfo(game)}`:'':`<div class="config-tags">${roleTags(room.config)}</div><p class="small muted">${room.config.victory==='side'?'屠边':'屠城'} · 夜间 ${room.config.nightSeconds} 秒 · 每人发言 ${room.config.daySeconds} 秒 · ${room.config.sheriff?'开启上警':'不开启上警'}</p>`}
-  ${!game?`<div class="controls">${room.matchmaking?'<span class="queue-count">满员后自动开始</span>':`<button class="btn ${me?.ready?'secondary':'primary'}" data-do="ready">${me?.ready?'取消准备':'准备'}</button>${host?`<button class="btn primary" data-do="start" ${room.players.length<capacity||room.players.some(p=>!p.ready)?'disabled':''}>开始游戏</button>`:''}`}<button class="btn secondary" data-do="leave">${room.matchmaking?'取消匹配':'离开房间'}</button></div>`:state.replay?'<div class="controls"><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>':game.phase==='finished'?`<div class="controls"><button class="btn primary" data-do="leave">返回大厅</button><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>`:`${NIGHT_PHASES.includes(game.phase)?'<div class="action-panel"><button class="btn primary" data-do="night-actions">提交答案 → 提交文件</button><p class="small muted">打开夜间行动区域，查看你的行动与队内交流。</p></div>':actionPanel(game)}<div class="controls">${game.canWithdraw?'<button class="btn secondary small" data-do="withdraw">退出竞选（退水）</button>':''}${game.canDuel?'<button class="btn danger small" data-do="duel">骑士决斗</button>':''}${game.canExplode?`<button class="btn danger small" data-do="explode">${game.myRole==='whiteWolfKing'?'白狼王自爆带人':'狼人自爆'}</button>`:''}${state.demo?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button><button class="btn secondary small" data-do="leave">退出试玩</button>':''}</div>`}`;
+  ${game?'':`<div class="config-tags">${roleTags(room.config)}</div><p class="small muted">${room.config.victory==='side'?'屠边':'屠城'} · 夜间 ${room.config.nightSeconds} 秒 · 每人发言 ${room.config.daySeconds} 秒 · ${room.config.sheriff?'开启上警':'不开启上警'}</p>`}
+  ${!game?`<div class="controls">${room.matchmaking?'<span class="queue-count">满员后自动开始</span>':`<button class="btn ${me?.ready?'secondary':'primary'}" data-do="ready">${me?.ready?'取消准备':'准备'}</button>${host?`<button class="btn primary" data-do="start" ${room.players.length<capacity||room.players.some(p=>!p.ready)?'disabled':''}>开始游戏</button>`:''}`}<button class="btn secondary" data-do="leave">${room.matchmaking?'取消匹配':'离开房间'}</button></div>`:state.replay?'<div class="controls"><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>':game.phase==='finished'?`<div class="controls"><button class="btn primary" data-do="leave">返回大厅</button><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>`:`${NIGHT_PHASES.includes(game.phase)?'<div class="action-panel"><button class="btn primary" data-do="night-actions">提交答案 → 提交文件</button><p class="small muted">展开「标签」可查看你的身份。</p></div>':actionPanel(game)}<div class="controls">${game.canWithdraw?'<button class="btn secondary small" data-do="withdraw">退出竞选（退水）</button>':''}${state.demo?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button><button class="btn secondary small" data-do="leave">退出试玩</button>':''}</div>`}`;
 }
 function submissionView(room){return `<section class="lg-card lg-submission"><nav class="lg-submit-tabs" aria-label="提交方式"><button class="${state.submitTab==='code'?'active':''}" data-submit-tab="code" aria-pressed="${state.submitTab==='code'}">提交代码</button><button class="${state.submitTab==='file'?'active':''}" data-submit-tab="file" aria-pressed="${state.submitTab==='file'}">提交文件</button></nav>${state.submitTab==='file'?nightActions(room):codeEditor()}</section>`;}
 function codeLineNumbers(code){return Array.from({length:code.split('\n').length},(_,i)=>i+1).join('\n');}
@@ -108,7 +231,7 @@ function nightActions(room){
   const g=room?.game;
   if(!room)return `<div class="action-panel"><p>加入房间后，可在这里进行夜间行动。</p><button class="btn primary" data-do="join-modal">输入房号加入</button></div>`;
   const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished';
-  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${g?.deadline?`<strong class="timer" data-deadline="${g.deadline}"></strong>`:''}</div>${g?.myRole&&!state.replay?`<div class="identity">你的身份：${badge(g.myRole)}</div>${privateInfo(g)}`:''}${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
+  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${g?.deadline?`<strong class="timer" data-deadline="${g.deadline}"></strong>`:''}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
 }
 function captureCodeEditor(){
   const editor=document.getElementById('code-editor');if(!editor)return;
@@ -133,7 +256,7 @@ function sheriffPanel(g){
 function actionPanel(g){
   const speech=['discussion','lastwords','sheriff_speech'].includes(g.phase);
   if(!g.actionable)return `<div class="action-panel"><p>${g.submitted?(['guard','wolf','seer','witch'].includes(g.phase)?'已提交，等待本阶段倒计时结束。':'已提交，等待其他玩家完成行动。'):speech?'请等待轮到你发言。可以先在右侧输入草稿。':g.phase==='sheriff_vote'?'等待警下玩家投票。报名上警者即使退水也不能投票。':g.phase==='sheriff_transfer'?'等待原警长移交或撕毁警徽。':g.phase==='sheriff_direction'?'等待警长选择发言方向。':'等待本阶段结束，请留意倒计时。'}</p></div>`;
-  if(speech)return `<div class="action-panel"><strong>轮到你${g.phase==='lastwords'?'发表遗言':g.phase==='sheriff_speech'?'竞选发言':'发言'}了</strong><p>在右侧「相关讨论」中输入内容，发言完成后点击该区域的「结束发言」。</p></div>`;
+  if(speech)return `<div class="action-panel"><strong>轮到你${g.phase==='lastwords'?'发表遗言':g.phase==='sheriff_speech'?'竞选发言':'发言'}了</strong><p>展开「相关讨论」输入内容，发言完成后点击「结束发言」。</p></div>`;
   if(g.phase==='sheriff_signup')return `<div class="action-panel"><strong>是否上警竞选警长？</strong><p>上警后将依次发表竞选发言。不上警可为候选人投票；报名超时视为不上警。</p><div class="controls"><button class="btn primary" data-action="join">我要上警</button><button class="btn secondary" data-action="skip">不上警</button></div></div>`;
   if(g.phase==='sheriff_direction')return `<div class="action-panel"><strong>选择本轮发言方向</strong><p>从警长相邻座位开始依次发言，最后由警长发言。左侧按座位号递减，右侧按座位号递增；超时默认从右侧开始。</p><div class="controls"><button class="btn primary" data-action="left">从左侧开始</button><button class="btn primary" data-action="right">从右侧开始</button></div></div>`;
   const targets=g.action?.targets||[],voting=['vote','sheriff_vote'].includes(g.phase),transfer=g.phase==='sheriff_transfer';
@@ -164,7 +287,9 @@ function chatPanel(room,channel){
   const g=room.game, isWolf=channel==='wolf', allowed=!state.replay&&(isWolf?Boolean(g?.canWolfChat):(!g||g.phase==='finished'||g.canSpeak));
   let entries=(room.messages||[]).filter(m=>(m.channel||'public')===channel).map(m=>({at:m.at||m.createdAt||0,html:`<div class="chat-message ${isWolf?'wolf-message':''}"><strong>${m.seat?m.seat+' 号 ':''}${escape(m.name||m.playerName||'玩家')}</strong> ${escape(m.text)}</div>`}));
   if(!isWolf)entries=entries.concat((g?.log||[]).map(l=>({at:l.at,html:`<div class="system-message">${escape(l.text)}</div>`}))).sort((a,b)=>a.at-b.at);
-  return `<section class="card chat-card"><div class="card-header"><strong>${isWolf?'狼人队内频道':'相关讨论'}</strong><small class="muted">${isWolf?(g?.phase==='finished'?'对局已结束 · 记录公开':'仅狼人夜间可见'):(g?escape(g.phaseLabel):'房间交流')}</small></div><div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${!state.replay?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea><div class="chat-actions"><small class="muted">${allowed?'可以发言':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}</section>`;
+  const body = `<div class="chat-feed" id="feed-${channel}">${entries.length?entries.map(e=>e.html).join(''):'<p class="muted small">暂无发言记录。</p>'}</div>${!state.replay?`<form class="chat-form" data-chat="${channel}"><textarea class="input chat-input" id="draft-${channel}" aria-label="${isWolf?'狼人队内消息':'发言内容'}" maxlength="500" rows="3" placeholder="${allowed?'输入你的发言…':'可以先写草稿，轮到你时再发送…'}">${escape(isWolf?state.wolfDraft:state.draft)}</textarea><div class="chat-actions"><small class="muted">${allowed?'可以发言':'当前不能发送'} · 最多 500 字</small><button class="btn primary small" type="submit" ${allowed?'':'disabled'}>发送</button></div>${!isWolf&&g?.canSpeak&&g?.actionable?'<button type="button" class="btn secondary small lg-end-speech" data-do="pass">结束发言</button>':''}</form>`:''}`;
+  if (!isWolf) return body;
+  return `<section class="card chat-card"><div class="card-header"><strong>狼人队内频道</strong><small class="muted">${g?.phase === 'finished' ? '对局已结束 · 记录公开' : '仅狼人夜间可见'}</small></div>${body}</section>`;
 }
 function render(){
   captureCodeEditor();
@@ -322,9 +447,31 @@ document.addEventListener('click',async event=>{
   // This decorative evaluation button must never submit code or a game action.
   if(b.dataset.do==='code-submit'){event.preventDefault();return;}
   if(b.disabled)return;
+  if (Object.prototype.hasOwnProperty.call(state.sidebar, b.dataset.sidebarToggle)) {
+    const key = b.dataset.sidebarToggle;
+    state.sidebar[key] = !state.sidebar[key];
+    render();
+    document.getElementById(b.id)?.focus({preventScroll:true});
+    return;
+  }
+  if (b.dataset.do === 'dismiss-ad') {
+    state.adDismissed = true;
+    render();
+    document.getElementById('toggle-recommendations')?.focus({preventScroll:true});
+    return;
+  }
   if(b.dataset.problemTab&&['description','submit'].includes(b.dataset.problemTab)){captureCodeEditor();state.problemTab=b.dataset.problemTab;render();return;}
   if(b.dataset.submitTab&&['code','file'].includes(b.dataset.submitTab)){captureCodeEditor();state.problemTab='submit';state.submitTab=b.dataset.submitTab;render();return;}
   if(b.dataset.do==='night-actions'){captureCodeEditor();state.problemTab='submit';state.submitTab='file';render();return;}
+  if (b.dataset.do === 'copy-problem') {
+    try {
+      await navigator.clipboard.writeText(ORIGINAL_PROBLEM_URL);
+      toast('题目链接已复制');
+    } catch {
+      modal('复制题目链接', `<label class="field"><span>洛谷原题</span><input class="input" value="${ORIGINAL_PROBLEM_URL}" readonly></label>`);
+    }
+    return;
+  }
   if(b.dataset.do==='copy-code'){await copyCode();return;}
   if(b.dataset.page){event.preventDefault();await navigate(b.dataset.page);return;}
   if(b.dataset.count){const r=b.dataset.count;state.config.roles[r]=Math.max(0,Math.min(r==='wolf'?6:r==='villager'?12:1,(state.config.roles[r]??0)+Number(b.dataset.delta)));updateCounts();return;}

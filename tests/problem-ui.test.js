@@ -296,6 +296,8 @@ test('night action controls and wolf chat exist only in 提交文件; code area 
   await ui.click({ submitTab: 'code' });
   assert.match(ui.html(), /id="code-editor"/);
   assert.doesNotMatch(ui.html(), /data-chat="wolf"|data-action="confirm"/);
+  assert.doesNotMatch(ui.html(), /data-chat="public"/);
+  await ui.click({ sidebarToggle: 'discussion' });
   assert.equal((ui.html().match(/data-chat="public"/g) || []).length, 1);
 });
 
@@ -305,6 +307,7 @@ test('相关讨论 is the inline public channel and the current speaker can send
     canSpeak: true, action: { type: 'pass', targets: [] } }), {
     messages: [{ name: '<script>名字</script>', seat: 2, text: '<img src=x onerror=bad()>', channel: 'public', at: Date.now() }],
   });
+  await ui.click({ sidebarToggle: 'discussion' });
   const html = ui.html();
   assert.match(html, /相关讨论/);
   assert.equal((html.match(/data-chat="public"/g) || []).length, 1);
@@ -317,4 +320,50 @@ test('相关讨论 is the inline public channel and the current speaker can send
     [{ text: '我是好人，请听我发言。', channel: 'public' }]);
   await ui.click({ do: 'pass' });
   assert.deepEqual(actions(ui).map(call => call.body), [{ type: 'pass' }]);
+});
+
+test('sidebar toggles independently, hides private roles in every tab, and hides them again when the room changes', async () => {
+  const ui = await frontend();
+  ui.putInRoom(gameView({
+    phase:'wolf', phaseLabel:'狼人行动', myRole:'whiteWolfKing', privateInfo:{wolfTeammates:[{id:'target', seat:2, name:'目标玩家'}]},
+    canExplode:true, canWolfChat:true,
+  }));
+  const expanded = key => ui.html().includes('data-sidebar-toggle="' + key + '" aria-expanded="true"');
+  assert.equal(expanded('tags') || expanded('discussion') || expanded('recommendations'), false);
+  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王|data-chat="public"|P5055/);
+  await ui.click({ sidebarToggle:'tags' });
+  await ui.click({ sidebarToggle:'recommendations' });
+  assert.match(ui.html(), /你的身份：[\s\S]*?白狼王/);
+  assert.match(ui.html(), /狼人同伴：2 号 目标玩家/);
+  assert.match(ui.html(), /href="https:\/\/www\.luogu\.com\.cn\/problem\/P5055"/);
+  assert.match(ui.html(), /Kruskal 重构树/);
+  await ui.click({ sidebarToggle:'discussion' });
+  await ui.edit('draft-public', '下一轮的草稿');
+  await ui.click({ sidebarToggle:'tags' });
+  await ui.click({ sidebarToggle:'discussion' });
+  await ui.click({ do:'night-actions' });
+  assert.match(ui.html(), /data-chat="wolf"/);
+  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王|下一轮的草稿/);
+  assert.ok(expanded('recommendations'));
+  await ui.click({ sidebarToggle:'tags' });
+  await ui.click({ sidebarToggle:'discussion' });
+  const updated = json(ui.app.state.room);
+  updated.messages.push({name:'目标玩家', text:'轮询消息', channel:'public', at:Date.now()});
+  ui.setServerRoom(updated);
+  await ui.app.refreshData();
+  assert.ok(expanded('tags') && expanded('discussion') && expanded('recommendations'));
+  assert.match(ui.html(), /下一轮的草稿/);
+  await ui.click({ problemTab:'description' });
+  ui.putInRoom(updated.game,{code:'654321'});
+  assert.equal(expanded('tags'),false);
+  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王/);
+});
+
+test('closing the ad survives renders without making a request', async () => {
+  const ui = await frontend(), before = ui.calls.length;
+  assert.match(ui.html(), /luogu-recommended\.png/);
+  await ui.click({do:'dismiss-ad'});
+  await ui.click({problemTab:'submit'});
+  assert.doesNotMatch(ui.html(), /luogu-recommended\.png/);
+  assert.equal(ui.calls.length,before);
 });
