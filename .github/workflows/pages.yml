@@ -30,19 +30,9 @@ jobs:
       - name: Validate Neon function bundle
         run: npm run build:neon
       - name: Build static site
-        run: npm run build
-      - name: Set multiplayer API address
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { writeFileSync } from 'node:fs';
-          const apiBase = (process.env.API_BASE_URL || '').trim().replace(/\/+$/, '');
-          if (apiBase && new URL(apiBase).protocol !== 'https:') {
-            throw new Error('API_BASE_URL must be an HTTPS URL');
-          }
-          writeFileSync('dist/config.js', `window.MOONWOLF_CONFIG = ${JSON.stringify({ apiBase })};\n`);
-          NODE
+        run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
