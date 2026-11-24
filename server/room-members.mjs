@@ -1,4 +1,4 @@
-import { advance, isPendingDeath, isWolfRole, migrateNightConfig, viewGame } from '../web/engine.js';
+import { STANDARD_CONFIG, advance, isPendingDeath, isWolfRole, migrateNightConfig, viewGame } from '../web/engine.js';
 
 const denied = () => Object.assign(new Error('观战时不能进行此操作'), { status: 403 });
 export const capacity = room => Object.values(room.config.roles).reduce((sum, count) => sum + count, 0);
@@ -56,7 +56,10 @@ export function updateRoom(room, now) {
   room.config.otherNightSeconds ??= 30;
   room.config.witchSelfSave ??= 'first';
   room.config.shuffleSeats ??= false;
-  if (!room.game) return;
+  if (!room.game) {
+    if (room.matchmaking) room.config.sheriff = STANDARD_CONFIG.sheriff;
+    return;
+  }
   migrateNightConfig(room.game, now);
   if (room.game.phase !== 'finished') advance(room.game, now);
   for (const person of room.players) {

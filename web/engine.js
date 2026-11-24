@@ -14,7 +14,7 @@ export const ROLE_INFO = Object.freeze({
 
 export const STANDARD_CONFIG = Object.freeze({
   roles: Object.freeze({ wolf: 4, wolfKing: 0, whiteWolfKing: 0, villager: 4, seer: 1, witch: 1, hunter: 1, guard: 1, fool: 0, knight: 0 }),
-  victory: 'side', nightSeconds: 75, otherNightSeconds: 30, witchSelfSave: 'first', shuffleSeats: false, daySeconds: 90, sheriff: false,
+  victory: 'side', nightSeconds: 75, otherNightSeconds: 30, witchSelfSave: 'first', shuffleSeats: false, daySeconds: 90, sheriff: true,
 });
 
 const NIGHT_PHASES = ['guard', 'wolf', 'seer', 'witch'];

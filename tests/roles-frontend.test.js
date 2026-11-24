@@ -56,18 +56,18 @@ test('room creation saves a city game with zero villagers, two of each special w
   const ui = await frontend();
   ui.app.createModal();
   for (const name of ['狼王', '白狼王', '愚者', '骑士']) assert.match(ui.elements.get('#modal-root').innerHTML, new RegExp(`增加${name}`));
-  assert.match(ui.elements.get('#modal-root').innerHTML, /type="checkbox" id="sheriff-enabled"/);
+  assert.match(ui.elements.get('#modal-root').innerHTML, /type="checkbox" id="sheriff-enabled" checked/);
   assert.match(ui.elements.get('#modal-root').innerHTML, /<option value="75" selected>75 秒<\/option>/);
   for (const [role, delta, count] of [['wolf',-1,4],['villager',-1,4],['wolfKing',1,2],['whiteWolfKing',1,2],['fool',1,2],['seer',1,1]]) {
     for(let i=0;i<count;i++)await ui.click({count:role,delta:String(delta)});
   }
   ui.field('#other-night-seconds', { value: '40' }); ui.field('#witch-self-save', { value: 'none' });
-  ui.field('#shuffle-seats', { checked: true }); ui.field('#sheriff-enabled', { checked: true });
+  ui.field('#shuffle-seats', { checked: true }); ui.field('#sheriff-enabled', { checked: false });
   ui.field('#victory', { value: 'all' }); ui.field('#night-seconds', { value: '75' }); ui.field('#day-seconds', { value: '90' });
   ui.field('#room-name', { value: '角色测试' }); ui.field('#visibility', { value: 'private' });
   await ui.submit('create-form');
   const posted = ui.calls.find(c => c.path === '/api/rooms' && c.body)?.body;
-  assert.equal(posted.config.sheriff, true);
+  assert.equal(posted.config.sheriff, false);
   assert.equal(posted.config.shuffleSeats, true);
   assert.equal(posted.config.witchSelfSave, 'none');
   assert.equal(posted.config.otherNightSeconds, 40);
@@ -79,14 +79,37 @@ test('room creation saves a city game with zero villagers, two of each special w
   assert.equal(posted.config.roles.fool, 2);
   assert.equal(Object.values(posted.config.roles).reduce((a, b) => a + b, 0), 11);
   await ui.click({ do: 'reset-config' });
-  assert.equal(ui.elements.get('#sheriff-enabled').checked, false);
+  assert.equal(ui.elements.get('#sheriff-enabled').checked, true);
   assert.equal(ui.elements.get('#shuffle-seats').checked, false);
   assert.equal(ui.elements.get('#witch-self-save').value, 'first');
   assert.equal(Number(ui.elements.get('#other-night-seconds').value), 30);
   assert.equal(ui.app.state.config.roles.wolfKing, 0);
   assert.equal(Number(ui.elements.get('#night-seconds').value), 75);
   ui.app.state.room={code:'123456',config:{...engine.STANDARD_CONFIG,victory:'all',nightSeconds:90},players:[],messages:[],game:null};
-  assert.match(ui.app.roomView(), /屠城 · 狼队 90 秒 · 其它行动 30 秒/);
+  ui.app.state.page='room';
+  ui.app.render();
+  assert.doesNotMatch(ui.app.roomView(), /屠城|狼队行动 90 秒/);
+  await ui.click({sidebarToggle:'tags'});
+  const tags=tagBody(ui.app.roomView());
+  assert.match(tags, />屠城</);
+  assert.match(tags, />狼队行动 90 秒</);
+  assert.match(tags, />其它行动 30 秒</);
+});
+
+test('a fresh twelve-seat practice game offers sheriff signup after the first night', async () => {
+  const ui = await frontend();
+  await ui.click({ do: 'demo' });
+  const room = ui.app.state.room;
+  assert.equal(room.players.length, 12);
+  assert.equal(room.config.sheriff, true);
+  assert.match(ui.app.roomView(), /已开启上警/);
+  for (let step = 0; step < 4 && ui.app.state.demoGame.phase === 'night'; step++) {
+    await ui.click({ do: 'demo-next' });
+  }
+  assert.equal(room.game.phase, 'sheriff_signup');
+  assert.match(ui.app.roomView(), /我要上警/);
+  await ui.click({ action: 'join' });
+  assert.equal(room.game.submitted, true);
 });
 
 test('sheriff signup, direction and transfer controls send engine-compatible payloads', async () => {
@@ -251,9 +274,65 @@ function tagBody(html){
   return body[1];
 }
 
+test('expanded waiting-room chips describe the chosen rules and only configured role counts',async()=>{
+  const ui=await frontend();
+  const config=engine.validateConfig({
+    roles:{wolfKing:2,villager:4,witch:1,knight:1},victory:'all',sheriff:false,shuffleSeats:true,
+    nightSeconds:60,otherNightSeconds:50,daySeconds:120,witchSelfSave:'none',
+  });
+  ui.app.state.room={code:'123456',name:'自选房',config,players:[],messages:[],game:null,visibility:'private'};
+  ui.app.state.page='room';
+  ui.app.render();
+  assert.doesNotMatch(ui.app.roomView(), /2 狼王|其它行动 50 秒/);
+  assert.match(ui.app.roomView(), /data-do="view-room-tags"/);
+  await ui.click({do:'view-room-tags'});
+  function labels(){
+    return [...tagBody(ui.app.roomView()).matchAll(/<span\b[^>]*>([^<]+)<\/span>/g)].map(m=>m[1].trim());
+  }
+  const rules=['8 人','2 狼王','4 村民','1 女巫','1 骑士','屠城','关闭上警','随机座位','狼队行动 60 秒','其它行动 50 秒','每人发言 120 秒','女巫不能自救','私密房间'];
+  assert.deepEqual(new Set(labels()),new Set(rules));
+  assert.doesNotMatch(tagBody(ui.app.roomView()),/lg-identity-tag|狼人同伴：|data-do="(?:duel|explode)"/);
+  ui.app.state.room.config={...engine.STANDARD_CONFIG};
+  ui.app.state.room.visibility='public';
+  for(const text of ['12 人','4 狼人','4 村民','1 预言家','1 女巫','1 猎人','1 守卫','屠边','开启上警','固定座位','狼队行动 75 秒','其它行动 30 秒','每人发言 90 秒','女巫仅第一晚被刀可以自救','公开房间']){
+    assert.ok(labels().includes(text),text);
+  }
+  ui.app.state.room.config={...config,witchSelfSave:'always'};
+  assert.ok(labels().includes('女巫可以自救'));
+  await ui.click({sidebarToggle:'tags'});
+  assert.doesNotMatch(tagBody(ui.app.roomView()),/lg-room-tags|lg-identity-tag|2 狼王/);
+});
+
+test('active chips use the game snapshot and only a living player can open their skill from the tags',async()=>{
+  const ui=await frontend();
+  const config=engine.validateConfig({roles:{wolf:1,villager:4,knight:1},victory:'all',sheriff:false,nightSeconds:60});
+  const g=gameView({config});
+  putInRoom(ui.app,g);
+  ui.app.state.room.config=engine.STANDARD_CONFIG;
+  await ui.click({sidebarToggle:'tags'});
+  let body=tagBody(ui.app.roomView());
+  assert.match(body,/>6 人</);
+  assert.match(body,/>关闭上警</);
+  assert.match(body,/>1 骑士</);
+  assert.match(body,/class="lg-identity-tag">你的身份：骑士</);
+  assert.match(body,/data-do="duel"/);
+  await ui.click({do:'duel'});
+  await ui.click({skillTarget:'target'});
+  await ui.click({do:'confirm-skill'});
+  assert.deepEqual(ui.calls.at(-1).body,{type:'duel',targetId:'target'});
+  putInRoom(ui.app,g);
+  g.players[0].alive=false;
+  ui.app.render();
+  assert.equal(ui.app.state.sidebar.tags,false);
+  await ui.click({sidebarToggle:'tags'});
+  body=tagBody(ui.app.roomView());
+  assert.match(body,/>1 骑士</);
+  assert.doesNotMatch(body,/lg-identity-tag|data-do="duel"/);
+});
+
 test('private team badges distinguish every wolf teammate from the hidden personal role and public reveals',async()=>{
   const ui=await frontend();
-  const game=gameView({myRole:'whiteWolfKing',canDuel:false,players:[
+  const game=gameView({myRole:'whiteWolfKing',canDuel:false,canExplode:true,players:[
     {id:'me',name:'甲',seat:1,alive:true,role:'whiteWolfKing'},
     {id:'wolf',name:'乙',seat:2,alive:true,role:'wolfKing'},
     {id:'fool',name:'丙',seat:3,alive:true,role:'fool',publicRole:'fool',foolRevealed:true},
@@ -269,19 +348,25 @@ test('private team badges distinguish every wolf teammate from the hidden person
     assert.doesNotMatch(seatMarkup(html,seat),/公开身份/);
   }
   assert.match(seatMarkup(html,3),/class="seat-role" aria-label="公开身份：愚者"><span class="badge god">愚者/);
-  assert.doesNotMatch(tagBody(html),/你的身份|白狼王|狼人同伴/);
+  assert.doesNotMatch(tagBody(html),/lg-identity-tag|狼人同伴|data-do="explode"/);
   await ui.click({sidebarToggle:'tags'});
-  assert.match(tagBody(ui.app.roomView()),/你的身份：[\s\S]*白狼王[\s\S]*狼人同伴：2 号 乙/);
+  assert.match(tagBody(ui.app.roomView()),/class="[^"]*\blg-identity-tag\b[^"]*"[^>]*>你的身份：白狼王</);
+  assert.match(tagBody(ui.app.roomView()),/狼人同伴：2 号 乙/);
+  assert.match(tagBody(ui.app.roomView()),/data-do="explode"/);
   game.players[1].publicRole='wolfKing';
   assert.match(seatMarkup(ui.app.roomView(),2),/公开身份：狼王/);
   assert.doesNotMatch(seatMarkup(ui.app.roomView(),2),/仅狼队可见/);
   game.players[0].publicRole='whiteWolfKing';
   html=ui.app.roomView();
   assert.match(seatMarkup(html,1),/公开身份：白狼王/);
-  assert.doesNotMatch(tagBody(html),/你的身份|白狼王/);
+  assert.match(tagBody(html),/class="[^"]*\blg-identity-tag\b[^"]*"[^>]*>你的身份：白狼王</);
   assert.match(tagBody(html),/狼人同伴：2 号 乙/);
   ui.app.state.room.isSpectator=true;
-  assert.doesNotMatch(tagBody(ui.app.roomView()),/狼人同伴|你的身份|狼王/);
+  ui.app.render();
+  assert.equal(ui.app.state.sidebar.tags,false);
+  await ui.click({sidebarToggle:'tags'});
+  assert.match(tagBody(ui.app.roomView()),/lg-room-tags/);
+  assert.doesNotMatch(tagBody(ui.app.roomView()),/狼人同伴|lg-identity-tag|2 号 乙|data-do="explode"/);
   assert.doesNotMatch(seatMarkup(ui.app.roomView(),4),/seat-role/);
   ui.app.state.room.isSpectator=false;
   game.myRole='seer';
@@ -304,9 +389,9 @@ test('AFK shares the status area with speaking, sheriff and death; only settled 
   assert.match(out,/class="seat [^"]*\bdead\b/);assert.match(out,/出局<\/span>.*挂机<\/span>/);
 });
 
-test('finished games and archived replays put every known role in the seat corner, leaving tags for algorithms',async()=>{
+test('finished games and archived replays show public roles at their seats and public rules in the tags',async()=>{
   const ui=await frontend();
-  const game=gameView({phase:'finished',winner:'good',players:[
+  const game=gameView({phase:'finished',winner:'good',config:engine.validateConfig({roles:{wolfKing:1,knight:1,villager:4}}),players:[
     {id:'me',name:'甲',seat:1,alive:true,role:'knight',publicRole:'knight'},
     {id:'other',name:'乙',seat:2,alive:false,role:'wolfKing'},
   ]});
@@ -317,8 +402,9 @@ test('finished games and archived replays put every known role in the seat corne
     const html=ui.app.roomView();
     assert.match(seatMarkup(html,1),/公开身份：骑士/);
     assert.match(seatMarkup(html,2),/公开身份：狼王/);
-    assert.match(tagBody(html),/树状数组/);
-    assert.doesNotMatch(tagBody(html),/lg-role-roster|你的身份|狼王|骑士/);
+    assert.match(tagBody(html),/>1 狼王</);
+    assert.match(tagBody(html),/>1 骑士</);
+    assert.doesNotMatch(tagBody(html),/lg-identity-tag|狼人同伴|2 号 乙|1 号 甲|data-do="(?:duel|explode)"/);
   }
 });
 

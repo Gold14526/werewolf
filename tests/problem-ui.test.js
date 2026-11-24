@@ -105,6 +105,21 @@ const actions = ui => ui.calls.filter(call => call.path === '/api/action');
 const options = html => [...html.matchAll(/<option\b[^>]*value="([^"]+)"[^>]*>([^<]*)<\/option>/g)]
   .map(match => ({ value: match[1], label: match[2] }));
 
+function tagsSection(html) {
+  const section = html.match(/<section\b[^>]*\blg-problem-tags\b[^>]*>[\s\S]*?<\/section>/);
+  assert.ok(section, 'expected the problem tag section');
+  return section[0];
+}
+
+function assertNativeTags(html) {
+  const section = tagsSection(html);
+  const preview = section.match(/<div class="lg-tags">([\s\S]*?)<\/div>/);
+  assert.ok(preview, 'expected always-visible problem tags');
+  const labels = [...preview[1].matchAll(/<span\b[^>]*>([^<]*)<\/span>/g)].map(match => match[1].trim());
+  assert.deepEqual(labels, ['IOI', '2018', 'O2 优化']);
+  assert.doesNotMatch(section, /problem\/list\?tag=|树状数组|Kruskal 重构树|深度优先搜索 DFS|可持久化线段树|线段树合并/);
+}
+
 test('the problem shell keeps twelve lobby seats and real room entry controls', async () => {
   const ui = await frontend();
   const html = ui.html();
@@ -114,6 +129,16 @@ test('the problem shell keeps twelve lobby seats and real room entry controls', 
   assert.match(html, /相关讨论/);
   assert.equal((html.match(/class="[^"]*\bseat empty\b/g) || []).length, 12);
   for (const action of ['match', 'create', 'join-modal', 'demo']) assert.match(html, new RegExp(`data-do="${action}"`));
+});
+
+test('the problem retains exactly three native tags with or without an open room', async () => {
+  const ui = await frontend();
+  assertNativeTags(ui.html());
+  assert.doesNotMatch(tagsSection(ui.html()), /data-sidebar-toggle="tags"/);
+  ui.putInRoom(null);
+  assertNativeTags(ui.html());
+  await ui.click({ sidebarToggle: 'tags' });
+  assertNativeTags(ui.html());
 });
 
 test('avatar votes immediately and both another avatar and abstention replace the ballot', async () => {
@@ -321,20 +346,23 @@ test('sidebar toggles independently, hides private roles in every tab, and hides
   }));
   const expanded = key => ui.html().includes('data-sidebar-toggle="' + key + '" aria-expanded="true"');
   assert.equal(expanded('tags') || expanded('discussion') || expanded('recommendations'), false);
-  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王|data-chat="public"|P5055/);
+  assert.doesNotMatch(tagsSection(ui.html()), /lg-identity-tag|狼人同伴：|data-do="explode"/);
+  assert.doesNotMatch(ui.html(), /data-chat="public"|P5055/);
   await ui.click({ sidebarToggle:'tags' });
   await ui.click({ sidebarToggle:'recommendations' });
-  assert.match(ui.html(), /你的身份：[\s\S]*?白狼王/);
-  assert.match(ui.html(), /狼人同伴：2 号 目标玩家/);
+  assert.match(tagsSection(ui.html()), /class="[^"]*\blg-identity-tag\b[^"]*"[^>]*>你的身份：白狼王</);
+  assert.match(tagsSection(ui.html()), /狼人同伴：2 号 目标玩家/);
+  assert.match(tagsSection(ui.html()), /data-do="explode"/);
   assert.match(ui.html(), /href="https:\/\/www\.luogu\.com\.cn\/problem\/P5055"/);
-  assert.match(ui.html(), /Kruskal 重构树/);
+  assertNativeTags(ui.html());
   await ui.click({ sidebarToggle:'discussion' });
   await ui.edit('draft-public', '下一轮的草稿');
   await ui.click({ sidebarToggle:'tags' });
   await ui.click({ sidebarToggle:'discussion' });
   await ui.click({ do:'night-actions' });
   assert.match(ui.html(), /data-chat="wolf"/);
-  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王|下一轮的草稿/);
+  assert.doesNotMatch(tagsSection(ui.html()), /lg-identity-tag|狼人同伴：|data-do="explode"/);
+  assert.doesNotMatch(ui.html(), /下一轮的草稿/);
   assert.ok(expanded('recommendations'));
   await ui.click({ sidebarToggle:'tags' });
   await ui.click({ sidebarToggle:'discussion' });
@@ -347,7 +375,7 @@ test('sidebar toggles independently, hides private roles in every tab, and hides
   await ui.click({ problemTab:'description' });
   ui.putInRoom(updated.game,{code:'654321'});
   assert.equal(expanded('tags'),false);
-  assert.doesNotMatch(ui.html(), /你的身份：|狼人同伴：|白狼王/);
+  assert.doesNotMatch(tagsSection(ui.html()), /lg-identity-tag|狼人同伴：|data-do="explode"/);
 });
 
 test('closing the ad survives renders without making a request', async () => {

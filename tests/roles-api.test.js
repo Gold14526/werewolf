@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/index.mjs';
+import { STANDARD_CONFIG } from '../web/engine.js';
 import { handleApi } from '../worker/api.js';
 import { TestD1Database } from './d1-shim.js';
 
@@ -847,5 +848,87 @@ for (const backend of ['node', 'cloud']) {
       assert.equal(replay.messages.some(m => m.text === chat.text), person !== visitor);
       assert.equal(replay.game.privateInfo.wolfHistory, undefined);
     }
+  });
+}
+
+for (const backend of ['node', 'cloud']) {
+  test(`${backend} upgrades an old waiting match in place and elects a sheriff before revealing a real first-night victim`, async t => {
+    const c = await setup(t, backend, { durable: true });
+    const people = [];
+    for (let n = 1; n <= 12; n++) people.push(await c.session('标准匹配' + n));
+    const match = async p => {
+      const response = await c.request('/api/match', { token: p.token, body: {} });
+      assert.equal(response.status, 200, response.data.error);
+      return response.data.room;
+    };
+    const first = await match(people[0]);
+    assert.equal(first.config.sheriff, true);
+    const waiting = await match(people[1]);
+    await c.reloadHandler({ code: first.code, edit(room) { room.config.sheriff = false; } });
+    const resumed = (await c.request('/api/room', { token: people[0].token })).data.room;
+    assert.equal(resumed.code, first.code);
+    assert.equal(resumed.config.sheriff, true);
+    assert.deepEqual(resumed.players.map(p => [p.id, p.seat]), waiting.players.map(p => [p.id, p.seat]));
+    for (const p of people.slice(2)) assert.equal((await match(p)).code, first.code);
+    const roomFor = async p => (await c.request('/api/room', { token: p.token })).data.room;
+    const views = await Promise.all(people.map(roomFor));
+    assert.ok(views.every(r => r.game && r.game.config.sheriff && r.players.length === 12));
+    const user = role => people[views.findIndex(r => r.game.myRole === role)];
+    const wolf = user('wolf'), victim = user('villager'), candidate = user('seer');
+    const post = async (p, body) => {
+      const response = await c.request('/api/action', { token: p.token, body });
+      assert.equal(response.status, 200, response.data.error);
+    };
+    let g = views[0].game;
+    for (const label of ['守卫行动', '狼人行动', '预言家行动', '女巫行动']) {
+      assert.equal(g.phaseLabel, label);
+      if (label === '狼人行动') await post(wolf, { type: 'wolf', targetId: victim.player.id });
+      c.setNow(g.deadline);
+      g = (await roomFor(victim)).game;
+    }
+    assert.equal(g.phase, 'sheriff_signup');
+    assert.equal(g.action.type, 'sheriff_signup');
+    assert.equal(g.players.find(p => p.id === victim.player.id).alive, true);
+    for (const p of people) await post(p, { type: 'sheriff_signup', choice: p === candidate ? 'join' : 'skip' });
+    const morning = (await roomFor(candidate)).game;
+    assert.equal(morning.sheriffId, candidate.player.id);
+    assert.equal(morning.phase, 'lastwords');
+    assert.equal(morning.players.find(p => p.id === victim.player.id).alive, false);
+  });
+
+  test(`${backend} keeps the original sheriff setting for active legacy matches and private rooms`, async t => {
+    const c = await setup(t, backend, { durable: true });
+    const roomFor = async p => (await c.request('/api/room', { token: p.token })).data.room;
+    const settings = { ...STANDARD_CONFIG, sheriff: false };
+    const owner = await c.session('旧自选房主');
+    const waiting = (await c.request('/api/rooms', { token: owner.token, body: { visibility: 'private', config: settings } })).data.room;
+    await c.reloadHandler();
+    assert.equal((await roomFor(owner)).code, waiting.code);
+    assert.equal((await roomFor(owner)).config.sheriff, false);
+
+    const dayWithoutElection = async p => {
+      let room = await roomFor(p);
+      assert.equal(room.config.sheriff, false);
+      assert.equal(room.game.config.sheriff, false);
+      while (room.game.phase === 'night') {
+        c.setNow(room.game.deadline);
+        room = await roomFor(p);
+      }
+      assert.equal(room.game.phase, 'discussion');
+      assert.equal(room.game.sheriffId, null);
+    };
+    const custom = await makeGame(c, settings);
+    await dayWithoutElection(custom.people[0]);
+
+    let match, participant;
+    for (let i = 0; i < 12; i++) {
+      participant = await c.session('旧匹配' + i);
+      match = (await c.request('/api/match', { token: participant.token, body: {} })).data.room;
+    }
+    await c.reloadHandler({ code: match.code, edit(stored) {
+      stored.config.sheriff = false;
+      stored.game.config.sheriff = false;
+    } });
+    await dayWithoutElection(participant);
   });
 }

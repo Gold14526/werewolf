@@ -49,7 +49,7 @@ test('special wolves count toward configuration balance and good specials count 
   assert.equal(validateConfig({ ...ALL, roles: { ...ALL.roles, knight: 2 } }).roles.knight, 2);
   assert.equal(validateConfig({ ...ALL, roles: { ...ALL.roles, whiteWolfKing: 2 } }).roles.whiteWolfKing, 2);
   assert.throws(() => validateConfig({ roles: { wolf: 7, villager: 9 }, victory: 'all' }));
-  assert.equal(STANDARD_CONFIG.sheriff, false);
+  assert.equal(STANDARD_CONFIG.sheriff, true);
   assert.equal(STANDARD_CONFIG.nightSeconds, 75);
   assert.equal(validateConfig({ roles: { wolfKing: 1, villager: 4, fool: 1 } }).nightSeconds, 75);
   for (const nightSeconds of [30, 45, 60, 75, 90]) assert.equal(validateConfig({ ...ALL, nightSeconds }).nightSeconds, nightSeconds);
@@ -287,7 +287,7 @@ test('election explosion cancels badge, honors poisoned king and independent fir
 });
 
 test('legacy snapshots without new fields resume existing phases and never start election', () => {
-  let g = game(STANDARD_CONFIG); night(g);
+  let g = game({ ...STANDARD_CONFIG, sheriff: false }); night(g);
   for (const key of ['sheriffId','sheriffElectionDone','sheriffCandidates','sheriffVoters','sheriffRunoff','pendingBadgeId','knightUsed']) delete g[key];
   delete g.config.sheriff;
   for (const role of ['wolfKing','whiteWolfKing','fool','knight']) delete g.config.roles[role];
@@ -295,4 +295,20 @@ test('legacy snapshots without new fields resume existing phases and never start
   assert.equal(viewGame(g, g.currentSpeakerId).canSpeak, true); exile(g, null);
   assert.equal(g.round, 2); assert.equal(g.phase, 'night'); night(g);
   assert.equal(g.phase, 'discussion');
+});
+
+test('first-night casualties stay in a standard game’s election until its result; disabling the sheriff skips it', () => {
+  for (const config of [STANDARD_CONFIG, { ...STANDARD_CONFIG, sheriff: false }]) {
+    const g = game(config), victim = who(g, 'villager'), candidate = who(g, 'seer');
+    night(g, { wolf: victim.id });
+    if (config.sheriff) {
+      assert.equal(g.phase, 'sheriff_signup');
+      assert.equal(viewGame(g, victim.id).action.type, 'sheriff_signup');
+      assert.equal(viewGame(g, null).players.find(p => p.id === victim.id).alive, true);
+      signup(g, [candidate.id]);
+      assert.equal(g.sheriffId, candidate.id);
+    } else assert.equal(g.sheriffId, null);
+    assert.equal(g.phase, 'lastwords');
+    assert.equal(viewGame(g, null).players.find(p => p.id === victim.id).alive, false);
+  }
 });

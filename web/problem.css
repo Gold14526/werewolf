@@ -344,8 +344,12 @@ body {
 .lg-provider { color: #e8a01b; font-weight: 700; }
 .lg-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 7px 0 0; }
 .lg-tags > * { display: inline-block; padding: 1px 7px; border-radius: 2px; background: #3498db; color: #fff; font-size: 13px; line-height: 20px; }
-.lg-tags > :first-child { background: #13b9ae; }
-.lg-tags > :nth-child(3) { background: #f39c11; }
+.lg-tags > .lg-tag-source { background: #13b9ae; }
+.lg-tags > .lg-tag-feature { background: #f39c11; }
+.lg-room-tags > .lg-count-tag { background: #526578; }
+.lg-room-tags > .lg-rule-tag { background: #267b70; }
+.lg-room-tags > .lg-time-tag { background: #2a729b; font-variant-numeric: tabular-nums; }
+.lg-tags > .lg-identity-tag { background: #8046a2; font-weight: 700; }
 .lg-reference-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 4px 0 0; font-size: 16px; }
 .lg-reference-links button,
 .lg-reference-links a { display: inline-flex; align-items: center; gap: 4px; color: #3498db; }
@@ -550,8 +554,6 @@ body {
 .lg-disclosure-arrow { width: 7px; height: 7px; border-right: 1px solid; border-bottom: 1px solid; transform: translateY(-2px) rotate(45deg); }
 .lg-disclosure[aria-expanded=true] .lg-disclosure-arrow { transform: translateY(2px) rotate(225deg); }
 .lg-side-section .lg-personal-role { padding-top: 12px; }
-.lg-algorithm-tags a { color: white; text-decoration: none; background: #3498db; }
-.lg-algorithm-tags a:hover { text-decoration: underline; }
 .lg-ad-caption { position: absolute; inset: 0; pointer-events: none; margin: 0; }
 .lg-ad-caption span { position: absolute; bottom: 10px; left: 10px; color: #fff; font-size: 14px; text-shadow: 0 1px 3px #222; }
 .lg-ad-caption span::before { content: 'AD'; font: 700 9px Arial,sans-serif; border: 1px solid; border-radius: 2px; padding: 0 1px; margin-right: 4px; }

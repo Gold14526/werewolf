@@ -222,6 +222,9 @@ test('tied wolves abstain from killing', () => {
   advance(g, g.deadline);
   assert.equal(g.night.victim, null);
   night(g);
+  assert.equal(g.phase, 'sheriff_signup');
+  advance(g, g.deadline);
+  assert.equal(g.phase, 'discussion');
   assert.equal(g.players.filter(p => p.alive).length, 12);
 });
 
@@ -343,7 +346,7 @@ test('only wolves see wolf ballots and living wolves chat only during wolf phase
 
 test('wolf explosion reveals role and interrupts speeches or voting', () => {
   for (const phase of ['discussion', 'vote']) {
-    const g = game(STANDARD_CONFIG);
+    const g = game({ ...STANDARD_CONFIG, sheriff: false });
     night(g);
     if (phase === 'vote') discussion(g);
     const wolf = id(g, 'wolf');
