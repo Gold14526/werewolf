@@ -167,6 +167,66 @@ test('a sheriff voter can revise a submitted ballot and only eligible avatars ac
   assert.deepEqual(actions(ui).at(-1).body,{type:'sheriff_vote',targetId:'target',turnDeadline:game.deadline});
 });
 
+function assertRunoffSeats(html, expectedSeats) {
+  const cards = [...html.matchAll(/<div class="(seat\s[^"]*)"><span class="seat-number">(\d+)<\/span>([\s\S]*?)<\/div><\/div>/g)]
+    .map(([, classes, seat, content]) => ({ seat: Number(seat), classes: classes.split(/\s+/), content }));
+  assert.equal(cards.length, 12);
+  assert.deepEqual(cards.filter(card => card.classes.includes('tied')).map(card => card.seat), expectedSeats);
+  assert.deepEqual(cards.filter(card => />\s*平票 PK\s*</.test(card.content)).map(card => card.seat), expectedSeats);
+  return cards;
+}
+
+test('spectators see precisely the active runoff seats during speeches and votes in either election', async () => {
+  const ui = await frontend();
+  ui.app.state.player = { id: 'observer', name: '观众' };
+  const game = gameView({ action: null, actionable: false, myRole: null, runoff: true, sheriffRunoff: true,
+    voteTargets: ['target', 'outside'], sheriffCandidates: gameView().players.slice(0, 2) });
+  for (const [phase, expectedSeats] of [
+    ['discussion', [2, 4]], ['vote', [2, 4]], ['sheriff_speech', [1, 2]], ['sheriff_vote', [1, 2]],
+  ]) {
+    const isSpeech = phase === 'discussion' || phase === 'sheriff_speech';
+    ui.putInRoom({ ...game, phase, currentSpeakerId: isSpeech ? 'target' : null }, { isSpectator: true });
+    const cards = assertRunoffSeats(ui.html(), expectedSeats);
+    assert.equal(cards.find(card => card.seat === 2).classes.includes('speaking'), isSpeech);
+    assert.doesNotMatch(ui.html(), /data-target="/);
+  }
+});
+
+test('first ballots and stages after a runoff clear the seat markers even with candidates still stored', async () => {
+  const ui = await frontend();
+  const game = gameView({ voteTargets: ['target', 'outside'], sheriffCandidates: gameView().players.slice(0, 2) });
+  for (const [phase, runoff, sheriffRunoff] of [
+    ['sheriff_speech', true, false], ['sheriff_vote', true, false],
+    ['discussion', false, true], ['vote', false, true],
+    ['lastwords', true, true], ['night', true, true], ['sheriff_direction', true, true],
+  ]) {
+    ui.putInRoom({ ...game, phase, runoff, sheriffRunoff, action: null, actionable: false });
+    assertRunoffSeats(ui.html(), []);
+  }
+});
+
+test('a player can click and change a runoff ballot while both tied seats keep their marks', async () => {
+  for (const phase of ['vote', 'sheriff_vote']) {
+    const ui = await frontend();
+    const game = gameView({ phase, runoff: phase === 'vote', sheriffRunoff: phase === 'sheriff_vote' });
+    const targets = game.players.filter(player => ['target', 'outside'].includes(player.id));
+    game.voteTargets = targets.map(player => player.id);
+    game.sheriffCandidates = targets;
+    game.action = { type: phase, targets };
+    ui.putInRoom(game);
+    for (const player of targets) {
+      const card = assertRunoffSeats(ui.html(), [2, 4]).find(card => card.seat === player.seat);
+      assert.match(card.content, new RegExp('<button[^>]*data-target="' + player.id + '"'));
+      await ui.click({ target: player.id });
+      const selected = assertRunoffSeats(ui.html(), [2, 4]).filter(card => card.classes.includes('selected'));
+      assert.deepEqual(selected.map(card => card.seat), [player.seat]);
+    }
+    assert.deepEqual(actions(ui).map(call => call.body), targets.map(player => ({
+      type: phase, targetId: player.id, turnDeadline: game.deadline,
+    })));
+  }
+});
+
 test('non-voters and replay views cannot cast or change ballots', async () => {
   const ui=await frontend();
   ui.putInRoom(gameView({actionable:false,submitted:true}));

@@ -255,6 +255,8 @@ body {
 .lg-background .seat.me { border-color: #9dcae8; background: #f6fbfe; }
 .lg-background .seat.speaking { border-color: #65b996; background: #f4fcf8; }
 .lg-background .seat.selected { border-color: #3498db; background: #eaf5fd; box-shadow: inset 0 0 0 1px #3498db; }
+.lg-background .seat.tied { outline: 2px solid #8555ae; outline-offset: 1px; }
+.lg-background .seat-status .tie-badge { color: #552b76; background: #efe3f8; white-space: nowrap; }
 .lg-background .seat.empty { border-style: dashed; background: #fafbfd; }
 .lg-background .seat.dead { opacity: .55; }
 .lg-background .seat-number { left: 6px; top: 5px; font-size: 11px; font-weight: 400; color: #82909b; }
