@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as engine from '../web/engine.js';
+import * as problem from '../web/problem-content.js';
 
 // A minimal DOM boundary lets us exercise the actual networking/session code
 // without a browser dependency. Layout remains a browser acceptance check.
 const source = (await readFile(new URL('../web/app.js', import.meta.url), 'utf8'))
-  .replace(/^import .*?;\n/, '') + '\n;globalThis.frontend = {state,connect,refreshData,mutation,invitationUrl,joinRoom,waitForConnect:()=>connectPromise};';
+  .replace(/^import .*?;\n/gm, '') + '\n;globalThis.frontend = {state,connect,refreshData,mutation,invitationUrl,joinRoom,waitForConnect:()=>connectPromise};';
 
 async function loadFrontend(fetch, {token='',url='https://moonwolf.test/'}={}) {
   const saved = new Map(token ? [['moonwolf:token:',token]] : []);
@@ -16,7 +17,7 @@ async function loadFrontend(fetch, {token='',url='https://moonwolf.test/'}={}) {
   const elements = new Map(['#app','#modal-root','#toast'].map(key=>[key,element()]));
   const callbacks = new Map();
   const context = vm.createContext({
-    ...engine, URL, Response, AbortSignal, structuredClone, console,
+    ...engine, ...problem, URL, Response, AbortSignal, structuredClone, console,
     location:{href:url,protocol:'https:'}, history:{replaceState(){}},
     localStorage:{getItem:key=>local.get(key)??null,setItem:(key,value)=>local.set(key,value)},
     sessionStorage:{getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value)},

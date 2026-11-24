@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import * as engine from '../web/engine.js';
+import * as problem from '../web/problem-content.js';
 
 // Exercise actual UI event handlers and outgoing payloads at the DOM boundary.
 const source = (await readFile(new URL('../web/app.js', import.meta.url), 'utf8'))
-  .replace(/^import .*?;\n/, '') + '\n;globalThis.frontend = {state,render,createModal,roomView,actionPanel,skillModal,confirmSkill,historyTable,waitForConnect:()=>connectPromise};';
+  .replace(/^import .*?;\n/gm, '') + '\n;globalThis.frontend = {state,render,createModal,roomView,actionPanel,skillModal,confirmSkill,historyTable,waitForConnect:()=>connectPromise};';
 const reply = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 async function frontend() {
   const elements = new Map();
@@ -14,7 +15,7 @@ async function frontend() {
   for (const key of ['#app', '#modal-root', '#toast']) elements.set(key, el());
   const callbacks = new Map(), calls = [];
   const context = vm.createContext({
-    ...engine, URL, Response, AbortSignal, structuredClone, console,
+    ...engine, ...problem, URL, Response, AbortSignal, structuredClone, console,
     location: { href: 'https://moonwolf.test/', protocol: 'https:' }, history: { replaceState() {} },
     localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
     document: { activeElement: null, visibilityState: 'visible', querySelector: key => elements.get(key) || null,
@@ -133,15 +134,22 @@ test('a phase change dismisses a pending special skill and prevents accidental s
 test('special wolves see the wolf channel, sheriff badges and revealed fool state render safely', async () => {
   const ui = await frontend();
   for (const role of ['wolfKing', 'whiteWolfKing']) {
+    ui.app.state.problemTab = 'description';
     putInRoom(ui.app, gameView({ myRole: role, sheriffId: 'me', players: [
       { id: 'me', name: '测试玩家', seat: 1, alive: true, role },
       { id: 'target', name: '<script>坏名字</script>', seat: 2, alive: true, role: 'fool', foolRevealed: true },
     ] }));
     const html = ui.app.roomView();
-    assert.match(html, /狼人队内频道/);
+    assert.doesNotMatch(html, /狼人队内频道/);
     assert.match(html, /badge sheriff/);
     assert.match(html, /已翻牌 · 无投票权/);
     assert.doesNotMatch(html, /<script>/);
+    ui.app.state.room.game.phase = 'wolf';
+    ui.app.state.problemTab = 'submit';
+    ui.app.state.submitTab = 'file';
+    const nightHtml = ui.app.roomView();
+    assert.match(nightHtml, /狼人队内频道/);
+    assert.doesNotMatch(nightHtml, /<script>/);
   }
   assert.match(ui.app.historyTable([{ code: '123456', winner: 'wolf', round: 1, endedAt: Date.now() }]), /狼人胜利/);
 });

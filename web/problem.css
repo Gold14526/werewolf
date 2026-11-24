@@ -1,0 +1,397 @@
+/* The problem page presentation. Game dialogs keep their existing layout. */
+:root {
+  --blue: #3498db;
+  --line: #e6e6e6;
+  --muted: #888;
+  color: #333;
+  background: #f2f2f2;
+}
+
+body { padding-left: 72px; background: #f2f2f2; }
+
+.lg-rail {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 72px;
+  overflow-y: auto;
+  background: #34495e;
+  color: #fff;
+  scrollbar-width: thin;
+}
+.lg-rail > a,
+.lg-rail > button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  width: 100%;
+  min-height: 65px;
+  padding: 10px 3px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #fff;
+  text-decoration: none;
+}
+.lg-rail > a:hover,
+.lg-rail > button:hover,
+.lg-rail > .active { background: #263b4f; }
+.lg-rail svg { width: 22px; height: 22px; }
+.lg-rail img { width: 31px; height: 31px; object-fit: contain; }
+.lg-rail small { font-size: 12px; line-height: 1.5; font-weight: 400; }
+.lg-rail-icon { display: block; height: 25px; font-size: 25px; line-height: 1; font-weight: 400; }
+.lg-rail > a:first-child,
+.lg-rail > button:first-child { min-height: 64px; }
+
+.lg-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 54px;
+  padding: 10px 28px;
+  background: #fff;
+  border-bottom: 1px solid #e9e9e9;
+  font-size: 14px;
+}
+.lg-topbar a { color: #3498db; }
+.lg-topbar .muted { color: #aaa; }
+.lg-topbar button { font-size: 13px; }
+.lg-topbar .account { gap: 9px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg-profile-avatar { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #e9f2f9; color: #5b90b8; font-size: 14px; }
+.lg-breadcrumb { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.lg-breadcrumb > span:first-of-type { color: #bbb; }
+.lg-page { max-width: 1228px; padding: 0 24px; margin: 24px auto 36px; }
+.lg-page > .alert { margin-bottom: 18px; }
+.lg-page .btn { border-radius: 3px; box-shadow: none; }
+.lg-page .btn.primary { border-color: #3498db; background: #3498db; color: #fff; }
+.lg-page .btn.primary:hover { border-color: #2488ca; background: #2488ca; }
+.lg-page .input { border-color: #ddd; border-radius: 3px; }
+.lg-page .input:focus { border-color: #3498db; }
+.lg-page :is(button, a, input, select, textarea):focus-visible,
+.lg-rail :is(button, a):focus-visible {
+  outline: 3px solid #83c7f3;
+  outline-offset: 3px;
+}
+.lg-page :is(button, a, input, select, textarea) { scroll-margin-top: 18px; }
+
+.lg-problem-header {
+  padding: 24px 28px 0;
+  margin-bottom: 20px;
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+}
+.lg-problem-header h1 {
+  margin: 0 0 15px;
+  font-size: 26px;
+  line-height: 1.5;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.lg-problem-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 25px;
+  padding-bottom: 22px;
+  color: #777;
+  font-size: 13px;
+}
+.lg-problem-stats strong { color: #555; font-weight: 400; }
+.lg-problem-stats a { color: #3498db; }
+.lg-problem-tabs,
+.lg-submit-tabs { display: flex; align-items: stretch; gap: 26px; }
+.lg-problem-tabs { border-top: 1px solid #f1f1f1; }
+.lg-page > .lg-problem-tabs { padding: 0 28px; margin: -20px 0 20px; background: #fff; }
+.lg-problem-tabs button,
+.lg-submit-tabs button {
+  position: relative;
+  min-height: 47px;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #666;
+  font-size: 15px;
+  white-space: nowrap;
+}
+.lg-problem-tabs button:hover,
+.lg-submit-tabs button:hover { color: #3498db; }
+.lg-problem-tabs button.active,
+.lg-submit-tabs button.active { border-bottom-color: #3498db; color: #3498db; }
+
+.lg-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 20px;
+}
+.lg-main,
+.lg-sidebar { min-width: 0; }
+.lg-card {
+  padding: 24px 28px;
+  margin-bottom: 20px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.lg-card h2 { margin-bottom: 18px; font-size: 22px; line-height: 1.5; font-weight: 400; }
+.lg-card h3 { margin-bottom: 14px; font-size: 18px; line-height: 1.5; font-weight: 400; }
+.lg-card p { line-height: 1.8; }
+.lg-background { overflow: visible; }
+.lg-background-intro { margin: -4px 0 18px; color: #555; font-size: 15px; }
+.lg-background .room-status {
+  padding: 11px 13px;
+  margin-bottom: 16px;
+  border: 1px solid #e5e5e5;
+  border-radius: 3px;
+  background: #fafafa;
+  font-size: 14px;
+}
+.lg-game-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #666;
+}
+.lg-game-toolbar .btn { min-height: 31px; font-size: 13px; padding: 4px 10px; }
+.lg-game-toolbar > div:last-child { margin-left: auto; }
+.lg-public-rooms { padding-top: 14px; margin-top: 16px; border-top: 1px solid #eee; font-size: 13px; }
+.lg-public-rooms summary { cursor: pointer; color: #3498db; }
+.lg-public-rooms[open] summary { margin-bottom: 14px; }
+.lg-public-rooms .table { font-size: 12px; }
+.lg-public-rooms .table th { font-weight: 400; border-bottom-width: 1px; }
+.lg-public-rooms .table :is(th, td) { padding: 8px 6px; }
+.lg-background .seats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 15px 0; }
+.lg-background .seat {
+  min-width: 0;
+  min-height: 134px;
+  padding: 28px 6px 10px;
+  border: 1px solid #e4e7eb;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: none;
+}
+.lg-background .seat.me { border-color: #9dcae8; background: #f6fbfe; }
+.lg-background .seat.speaking { border-color: #65b996; background: #f4fcf8; }
+.lg-background .seat.selected { border-color: #3498db; background: #eaf5fd; box-shadow: inset 0 0 0 1px #3498db; }
+.lg-background .seat.empty { border-style: dashed; background: #fcfcfc; }
+.lg-background .seat.dead { opacity: .55; }
+.lg-background .seat-number { left: 8px; top: 7px; font-size: 12px; font-weight: 400; color: #888; }
+.lg-background .seat-role { top: 7px; right: 6px; }
+.lg-background .seat-name { font-size: 13px; font-weight: 400; color: #555; }
+.lg-background .seat.me .seat-name { color: #2980b9; }
+.lg-background .seat.empty .seat-name { color: #aaa; }
+.lg-background .seat-status { font-size: 11px; min-height: 18px; }
+.lg-background .avatar { width: 42px; height: 42px; margin: 0 auto 7px; font-size: 21px; }
+.lg-seat-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.lg-seat-button:not(:disabled):hover { border-color: #3498db; box-shadow: 0 0 0 3px #3498db1a; }
+.lg-seat-button.selected,
+.seat.selected .lg-seat-button { border-color: #3498db; box-shadow: 0 0 0 3px #3498db1f; }
+.lg-seat-button:disabled { opacity: 1; cursor: default; }
+.lg-background .identity,
+.lg-background .sheriff-panel { border-radius: 3px; font-size: 13px; }
+.lg-background .identity { border-color: #d3e7f5; background: #f6fbfe; }
+.lg-background .controls { justify-content: flex-start; margin-bottom: 0; }
+.lg-background .controls + p { margin-top: 11px; }
+.lg-background .action-panel { margin: 16px 0 0; }
+.lg-page .action-panel { border-radius: 3px; border-color: #d7e7f2; background: #f8fbfd; }
+.lg-page .action-panel h3 { margin-bottom: 8px; font-size: 16px; }
+.lg-page .target { border-radius: 3px; }
+.lg-page .target.selected { background: #3498db; border-color: #3498db; }
+
+.lg-statement { font-size: 15px; line-height: 1.8; overflow-wrap: anywhere; }
+.lg-statement h2 { margin: 28px 0 16px; }
+.lg-statement h2:first-child { margin-top: 0; }
+.lg-statement h3 { margin: 22px 0 12px; }
+.lg-statement p { margin: 12px 0; }
+.lg-statement p:last-child { margin-bottom: 0; }
+.lg-statement :is(ul, ol) { margin: 10px 0; padding-left: 26px; }
+.lg-statement li { margin: 5px 0; }
+.lg-statement :is(code, pre) { font-family: Consolas, "Liberation Mono", Menlo, monospace; }
+.lg-statement code { padding: 2px 4px; border-radius: 2px; background: #f4f4f4; font-size: .9em; }
+.lg-statement pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 14px 16px;
+  margin: 12px 0;
+  border: 1px solid #e5e5e5;
+  border-radius: 3px;
+  background: #f8f8f8;
+  color: #333;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.lg-statement pre code { padding: 0; background: transparent; font-size: inherit; }
+.lg-statement img { max-width: 100%; height: auto; }
+.lg-statement table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+.lg-statement :is(th, td) { padding: 8px; border: 1px solid #ddd; text-align: left; }
+.lg-statement th { background: #fafafa; font-weight: 500; }
+.lg-statement sub,
+.lg-statement sup { font-size: .75em; }
+.lg-statement .math-inline { padding: 0 2px; font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-size: 1.08em; }
+.lg-statement .problem-section + .problem-section { margin-top: 28px; }
+.lg-statement .problem-sample { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 14px 0; }
+.lg-statement .problem-sample-block { display: flex; min-width: 0; flex-direction: column; }
+.lg-statement .problem-sample-label { margin: 0; font-size: 14px; font-weight: 500; }
+.lg-statement .problem-sample pre { flex: 1; margin-bottom: 0; }
+
+.lg-sidebar .lg-card { padding: 20px; }
+.lg-sidebar h3 { font-size: 18px; }
+.lg-meta-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 13px; font-size: 14px; }
+.lg-meta-row:last-child { margin-bottom: 0; }
+.lg-meta-row > :last-child { text-align: right; }
+.lg-meta-row strong { font-weight: 400; }
+.lg-meta-row .difficulty,
+.lg-meta-row .lg-difficulty { color: #9d3dcf; }
+.lg-provider { color: #e67e22; }
+.lg-tags { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 17px; margin-top: 17px; border-top: 1px solid #eee; }
+.lg-problem-tags .lg-tags { margin-top: 0; padding-top: 0; border-top: 0; }
+.lg-tags > * { display: inline-block; padding: 2px 8px; border-radius: 2px; background: #3498db; color: #fff; font-size: 12px; line-height: 1.8; }
+.lg-reference-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #eee; font-size: 13px; }
+.lg-reference-actions a { color: #3498db; }
+.lg-connection { font-size: 12px; color: #888; line-height: 1.7; }
+.lg-connection .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: #5cb88a; }
+.lg-discussion { padding: 20px; margin-bottom: 20px; background: #fff; }
+.lg-discussion .lg-card { padding: 0; }
+.lg-discussion .chat-card { margin-bottom: 0; border: 0; border-radius: 0; overflow: visible; }
+.lg-discussion .card-header { padding: 0 0 12px; min-height: 0; border: 0; background: transparent; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; }
+.lg-discussion .card-header strong { font-size: 18px; font-weight: 400; color: #333; }
+.lg-discussion .card-header small { font-size: 11px; }
+.lg-discussion .card-body { padding: 14px 0 0; }
+.lg-discussion .chat-feed { height: 360px; padding: 12px 0; border-top: 1px solid #eee; font-size: 13px; line-height: 1.7; scrollbar-width: thin; }
+.lg-discussion .chat-feed.team { height: 210px; }
+.lg-discussion .chat-form { padding: 12px 0 0; border-top: 1px solid #eee; }
+.lg-discussion .chat-input { min-height: 88px; font-size: 13px; line-height: 1.6; resize: vertical; }
+.lg-discussion .chat-actions { align-items: flex-start; gap: 8px; }
+.lg-discussion .chat-actions small { font-size: 11px; line-height: 1.6; }
+.lg-discussion .chat-actions .btn { flex-shrink: 0; }
+
+.lg-submit-tabs { margin: -5px 0 22px; border-bottom: 1px solid #e6e6e6; }
+.lg-submit-tabs button { font-size: 14px; }
+.lg-code-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; font-size: 14px; }
+.lg-code-toolbar label { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lg-code-toolbar .input { flex: 0 1 240px; width: 240px; min-width: 140px; }
+.lg-code-toolbar > .btn:last-child { margin-left: auto; }
+.lg-code-editor #code-editor {
+  display: block;
+  min-height: 470px;
+  padding: 18px;
+  border: 1px solid #dcdcdc;
+  border-radius: 2px;
+  background: #fafafa;
+  color: #333;
+  font-family: Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-wrap: normal;
+  tab-size: 4;
+  resize: vertical;
+}
+.lg-editor-status { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 14px; color: #888; font-size: 12px; }
+.lg-editor-status .btn { font-size: 14px; }
+.lg-code-editor > .controls,
+.lg-night-actions > .controls { justify-content: flex-start; margin-bottom: 0; }
+.lg-night-actions > .action-panel:first-child { margin-top: 0; }
+.lg-night-actions .chat-card { border-radius: 3px; margin-top: 20px; }
+.lg-night-actions .card-header { background: #fafafa; }
+.lg-page > .footer { padding: 14px 0; margin-top: 8px; border: 0; color: #aaa; font-size: 12px; }
+.lg-page > .footer button { margin-left: 8px; font-size: 12px; }
+
+@media (min-width: 1450px) {
+  .lg-page { margin-top: 28px; }
+}
+@media (max-width: 1120px) {
+  .lg-layout { grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; }
+  .lg-card { padding: 22px; }
+  .lg-problem-header { padding-left: 22px; padding-right: 22px; }
+  .lg-page > .lg-problem-tabs { padding-left: 22px; padding-right: 22px; }
+  .lg-background .seats { gap: 7px; }
+  .lg-background .seat-role .badge { max-width: 58px; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 900px) {
+  .lg-page { padding: 0 20px; margin-top: 20px; }
+  .lg-topbar { padding-left: 20px; padding-right: 20px; }
+  .lg-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .lg-sidebar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 18px; align-items: start; }
+  .lg-sidebar > .lg-connection { grid-column: 1 / -1; }
+  .lg-sidebar > .lg-discussion { grid-column: 1 / -1; }
+  .lg-background .seats { gap: 10px; }
+  .lg-background .seat-role .badge { max-width: none; }
+  .lg-problem-header h1 { font-size: 24px; }
+  .lg-discussion .chat-feed { height: 300px; }
+}
+@media (max-width: 640px) {
+  .lg-sidebar { display: block; }
+  .lg-card { padding: 20px; }
+  .lg-problem-header { padding: 20px 20px 0; }
+  .lg-page > .lg-problem-tabs { padding-left: 20px; padding-right: 20px; }
+  .lg-problem-stats { gap: 5px 16px; font-size: 12px; }
+  .lg-background .seats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .lg-background .room-status { align-items: flex-start; flex-wrap: wrap; }
+  .lg-background .identity button { margin-left: 0; }
+}
+@media (max-width: 540px) {
+  body { padding-left: 48px; }
+  .lg-rail { width: 48px; }
+  .lg-rail > a,
+  .lg-rail > button { min-height: 59px; padding: 8px 1px; gap: 3px; }
+  .lg-rail > a:first-child,
+  .lg-rail > button:first-child { min-height: 54px; }
+  .lg-rail svg { width: 19px; height: 19px; }
+  .lg-rail img { width: 26px; height: 26px; }
+  .lg-rail small { font-size: 10px; letter-spacing: -.25px; }
+  .lg-rail-icon { height: 22px; font-size: 22px; }
+  .lg-topbar { min-height: 54px; padding: 10px 12px; gap: 8px; font-size: 12px; }
+  .lg-topbar .btn { padding: 4px 7px; font-size: 12px; min-height: 30px; }
+  .lg-page { padding: 0 10px; margin: 12px auto 24px; }
+  .lg-problem-header { padding: 16px 15px 0; margin-bottom: 12px; }
+  .lg-page > .lg-problem-tabs { padding-left: 15px; padding-right: 15px; margin-top: -12px; margin-bottom: 12px; }
+  .lg-problem-header h1 { margin-bottom: 12px; font-size: 20px; line-height: 1.55; }
+  .lg-problem-stats { padding-bottom: 16px; gap: 5px 12px; font-size: 11px; }
+  .lg-problem-tabs { gap: 25px; }
+  .lg-problem-tabs button { font-size: 14px; }
+  .lg-card,
+  .lg-sidebar .lg-card { padding: 17px 15px; margin-bottom: 12px; }
+  .lg-discussion { padding: 17px 15px; margin-bottom: 12px; }
+  .lg-sidebar .lg-discussion .lg-card { padding: 0; margin-bottom: 0; }
+  .lg-card h2 { margin-bottom: 14px; font-size: 20px; }
+  .lg-background .seat { min-height: 125px; padding: 27px 3px 8px; }
+  .lg-background .seat-name { font-size: 12px; }
+  .lg-background .seat-number { left: 5px; top: 6px; font-size: 11px; }
+  .lg-background .seat-role { right: 4px; top: 6px; }
+  .lg-background .seat-role .badge { max-width: 44px; font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
+  .lg-background .avatar { width: 38px; height: 38px; font-size: 19px; }
+  .lg-game-toolbar { gap: 7px; }
+  .lg-game-toolbar .btn { font-size: 12px; padding: 4px 8px; }
+  .lg-statement { font-size: 14px; }
+  .lg-statement pre { padding: 10px; font-size: 12px; }
+  .lg-statement .problem-sample { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .lg-code-toolbar { gap: 8px; }
+  .lg-code-toolbar .input { flex: 1 1 140px; width: auto; min-width: 0; }
+  .lg-code-editor #code-editor { min-height: 360px; padding: 12px; font-size: 12px; }
+  .lg-editor-status { align-items: flex-start; }
+}
