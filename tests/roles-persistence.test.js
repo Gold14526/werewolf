@@ -282,3 +282,110 @@ test('Postgres reopens two witches’ revised decisions and debits each final po
   assert.deepEqual(viewGame(recovered, second.id).privateInfo.potions, { save: false, poison: true });
   assert.equal(Object.hasOwn(viewGame(recovered, attacked.id).privateInfo, 'potions'), false);
 });
+
+for (const legacy of [true, false]) {
+  test(`Postgres restores ${legacy ? 'previously revealed' : 'unrevealed'} sheriff-shooter without reviving or revealing a seat`, async t => {
+    const store = await diskStore(t);
+    const g = game({ ...NEW_CONFIG, roles: { wolfKing: 2, whiteWolfKing: 2, seer: 4, hunter: 1 }, victory: 'all' });
+    const hunter = rolePlayer(g, 'hunter'), heir = rolePlayer(g, 'seer');
+    finishNight(g, hunter.id);
+    enroll(g, [hunter.id]);
+    assert.equal(g.phase, 'hunter');
+    if (legacy) {
+      // The preceding engine removed and revealed the shooter on entry to this phase.
+      hunter.alive = false;
+      hunter.revealed = true;
+      g.sheriffId = null;
+    }
+    await store.save(g);
+    const recovered = await store.reopen();
+    const visibleHunter = () => viewGame(recovered, null).players.find(p => p.id === hunter.id);
+    assert.equal(visibleHunter().alive, !legacy);
+    assert.equal(visibleHunter().publicRole, legacy ? 'hunter' : undefined);
+    assert.equal(viewGame(recovered, hunter.id).actionable, true);
+    assert.equal(viewGame(recovered, heir.id).actionable, false);
+    assert.equal(viewGame(recovered, null).phase, legacy ? 'hunter' : 'resolution');
+    assert.equal(viewGame(recovered, hunter.id).phase, 'hunter');
+    if (legacy) submit(recovered, hunter.id, { type: 'hunter', targetId: null });
+    else advance(recovered, recovered.deadline);
+    assert.equal(recovered.phase, 'sheriff_transfer');
+    assert.equal(visibleHunter().alive, !legacy);
+    assert.equal(visibleHunter().publicRole, legacy ? 'hunter' : undefined);
+    assert.equal(recovered.winner, null);
+    submit(recovered, hunter.id, { type: 'sheriff_transfer', targetId: heir.id });
+    assert.equal(recovered.sheriffId, heir.id);
+    assert.equal(visibleHunter().alive, false);
+    assert.equal(visibleHunter().publicRole, legacy ? 'hunter' : undefined);
+    assert.deepEqual(recovered.hunterUsed, [hunter.id]);
+    assert.equal(recovered.phase, 'lastwords');
+    submit(recovered, hunter.id, { type: 'pass' });
+    assert.equal(recovered.phase, 'sheriff_direction');
+    assert.equal(recovered.winner, null);
+  });
+}
+
+test('Postgres reopening a terminal legacy shot, badge or last words ends it before another action', async t => {
+  const store = await diskStore(t);
+  for (const phase of ['hunter', 'sheriff_transfer', 'lastwords']) {
+    const g = game({ ...NEW_CONFIG, roles: { wolfKing: 1, villager: 4, seer: 1 }, victory: 'all' });
+    const king = rolePlayer(g, 'wolfKing'), heir = rolePlayer(g, 'villager');
+    // An earlier server saved a final exile and its unfinished death action.
+    g.deadline = store.now + 30_000;
+    g.phase = phase;
+    g.resume = 'night';
+    king.alive = phase !== 'lastwords';
+    g.pendingHunters = phase === 'hunter' ? [king.id] : [];
+    g.pendingBadgeId = phase === 'lastwords' ? null : king.id;
+    g.sheriffId = g.pendingBadgeId;
+    g.lastWordsQueue = [king.id];
+    g.currentSpeakerId = phase === 'lastwords' ? king.id : null;
+    await store.save(g);
+    const recovered = await store.reopen();
+    if (phase === 'sheriff_transfer') {
+      assert.throws(() => act(recovered, king.id, { type: phase, targetId: heir.id }, store.now));
+    } else advance(recovered, store.now);
+    assert.equal(recovered.phase, 'finished');
+    assert.equal(recovered.winner, 'good');
+    assert.equal(recovered.players.find(p => p.id === king.id).alive, false);
+    assert.deepEqual(recovered.hunterUsed, []);
+    assert.deepEqual(recovered.pendingHunters, []);
+    assert.equal(recovered.pendingBadgeId, null);
+    assert.notEqual(recovered.sheriffId, heir.id);
+    assert.equal(recovered.deadline, null);
+    assert.equal(viewGame(recovered, king.id).actionable, false);
+  }
+});
+
+test('Postgres reopens a legacy parallel night with public intervals and the original private ballots', async t => {
+  const store = await diskStore(t);
+  const g = game({ roles: { wolf: 1, guard: 1, seer: 1, witch: 1, villager: 2 }, victory: 'all', nightSeconds: 75 });
+  delete g.night.sequential;
+  g.night.windows = [
+    { role: 'guard', offset: 0 }, { role: 'seer', offset: 0 },
+    { role: 'wolf', offset: 45_000 }, { role: 'witch', offset: 75_000 },
+  ];
+  const wolf = rolePlayer(g, 'wolf'), villager = rolePlayer(g, 'villager');
+  submit(g, wolf.id, { type: 'wolf', targetId: villager.id });
+  await store.save(g);
+  const restored = await store.reopen();
+  const end = restored.deadline;
+  const spectator = () => viewGame(restored, null);
+  assert.deepEqual(spectator().nightStages, [
+    { type: 'guard', label: '守卫行动', deadline: end },
+    { type: 'wolf', label: '狼人行动', deadline: end + 45_000 },
+    { type: 'seer', label: '预言家行动', deadline: end },
+  ]);
+  assert.equal(spectator().deadline, end);
+  assert.deepEqual(spectator().privateInfo, {});
+  assert.equal(spectator().action, null);
+  assert.equal(viewGame(restored, wolf.id).action.deadline, end + 45_000);
+  assert.equal(viewGame(restored, wolf.id).action.selected.targetId, villager.id);
+  advance(restored, end);
+  assert.equal(spectator().phaseLabel, '狼人行动');
+  assert.equal(spectator().deadline, end + 45_000);
+  advance(restored, end + 45_000);
+  assert.equal(spectator().phaseLabel, '女巫行动');
+  assert.equal(spectator().deadline, end + 75_000);
+  assert.equal(viewGame(restored, rolePlayer(g, 'witch').id).privateInfo.nightVictim.id, villager.id);
+  assert.deepEqual(spectator().privateInfo, {});
+});

@@ -1,12 +1,12 @@
 /** Authoritative, dependency-free rules shared by the server and the local demo. */
 export const ROLE_INFO = Object.freeze({
   wolf: { name: '狼人', team: 'wolf', description: '每晚与同伴共同选择一名玩家袭击。' },
-  wolfKing: { name: '狼王', team: 'wolf', description: '参与夜间袭击；出局后可以开枪，被毒杀、自爆、骑士决斗或白狼王带走时不能开枪。' },
+  wolfKing: { name: '狼王', team: 'wolf', description: '参与夜间袭击。若本人出局后对局仍继续，可在正式出局前开枪。被毒杀、自爆、在骑士决斗中落败或被白狼王带走时不能开枪。' },
   whiteWolfKing: { name: '白狼王', team: 'wolf', description: '参与夜间袭击；白天发言时可自爆并带走一人，被带走者不能发动死亡技能。' },
   villager: { name: '村民', team: 'good', description: '白天通过发言和投票找出狼人。' },
   seer: { name: '预言家', team: 'good', description: '每晚查验一名玩家的阵营。' },
   witch: { name: '女巫', team: 'good', description: '各有一瓶解药与毒药，每晚最多使用一种。自救依房间规则。' },
-  hunter: { name: '猎人', team: 'good', description: '被袭击或放逐后可开枪带走一人；被毒杀或白狼王带走时不能开枪。' },
+  hunter: { name: '猎人', team: 'good', description: '被袭击或放逐后，若对局仍继续，可在正式出局前开枪带走一人；被毒杀或白狼王带走时不能开枪。' },
   fool: { name: '愚者', team: 'good', description: '首次被放逐时翻牌免死，之后仍可发言，但失去投票权且不能再被放逐。' },
   knight: { name: '骑士', team: 'good', description: '白天发言阶段可决斗一次：对方是狼人则对方出局并入夜，否则自己出局、发言继续。' },
   guard: { name: '守卫', team: 'good', description: '每晚守护一人，不能连续守护同一人；同守同救仍会死亡。' },
@@ -31,7 +31,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 export function roleLimit(role) {
   if (role === 'wolf') return 6;
   if (role === 'villager') return 12;
-  return isWolfRole(role) ? 1 : 18;
+  return isWolfRole(role) ? 8 : 18;
 }
 
 export function validateConfig(input = STANDARD_CONFIG) {
@@ -50,9 +50,9 @@ export function validateConfig(input = STANDARD_CONFIG) {
   assert(total >= 6 && total <= 18, '总人数需要在 6 至 18 人之间');
   const wolves = Object.entries(roles).reduce((n, [role, count]) => n + (isWolfRole(role) ? count : 0), 0);
   assert(wolves >= 1 && wolves < total / 2, '狼人至少 1 人，且必须少于总人数的一半');
-  assert(roles.villager >= 1, '至少需要 1 位村民');
   const victory = input.victory ?? 'side';
   assert(victory === 'side' || victory === 'all', '胜利条件不正确');
+  assert(victory !== 'side' || roles.villager >= 1, '屠边模式至少需要 1 位村民');
   assert(victory !== 'side' || roles.seer + roles.witch + roles.hunter + roles.guard + roles.fool + roles.knight > 0, '屠边模式至少需要一个神职');
   const nightSeconds = input.nightSeconds ?? 75;
   const otherNightSeconds = input.otherNightSeconds ?? 30;
@@ -114,7 +114,11 @@ function addAudit(game, text, now) {
   game.audit.push({ round: game.round, text: `【复盘】${text}`, at: now, seq: game.eventSequence });
 }
 function targetLabel(game, id) { const target = player(game, id); return target ? `${target.seat} 号` : '无人'; }
-function live(game) { return game.players.filter(p => p.alive); }
+export function isPendingDeath(game, id) {
+  return id != null && Boolean(game && (game.pendingHunters?.includes(id) || game.pendingBadgeId === id));
+}
+function isStanding(game, p) { return p?.alive && !isPendingDeath(game, p.id); }
+function live(game) { return game.players.filter(p => isStanding(game, p)); }
 function player(game, id) { return game.players.find(p => p.id === id); }
 function eligible(game) {
   if (game.phase === 'hunter') return game.pendingHunters.length ? [game.pendingHunters[0]] : [];
@@ -198,15 +202,28 @@ export function migrateNightConfig(game, now = Date.now()) {
   return true;
 }
 
-function nightTurn(game, actor) {
-  if (game.phase !== 'night' || !actor?.alive) return null;
-  const role = isWolfRole(actor.role) ? 'wolf' : actor.role;
+function nightWindowForRole(game, role) {
   const windows = game.night.windows;
   if (game.night.sequential) return windows[0].role === role ? windows[0] : null;
   // A saved parallel night retains the windows, ballots and private deadlines it opened with.
   if (role === 'witch' && windows.some(w => w.role === 'wolf')) return null;
   return windows.find(w => w.role === role) ?? null;
 }
+function nightTurn(game, actor) {
+  if (game.phase !== 'night' || !actor?.alive) return null;
+  return nightWindowForRole(game, isWolfRole(actor.role) ? 'wolf' : actor.role);
+}
+
+function publicNightStages(game) {
+  if (game.phase !== 'night') return [];
+  // Read only the configured schedule. Dead roles retain their windows, and
+  // legacy parallel nights can have several active roles with distinct deadlines.
+  return NIGHT_PHASES.flatMap(role => {
+    const window = nightWindowForRole(game, role);
+    return window ? [{ type: role, label: LABELS[role], deadline: game.deadline + window.offset }] : [];
+  });
+}
+
 function potionsFor(game, witch) {
   return witch.potions ?? game.potions ?? { save: true, poison: true };
 }
@@ -317,19 +334,31 @@ function beginVote(game, now) {
 }
 function eliminate(game, id, cause) {
   const target = player(game, id);
-  if (!target || !target.alive) return;
-  target.alive = false;
+  if (!isStanding(game, target)) return false;
   const canShoot = target.role === 'hunter' ? !['poison', 'whiteWolf'].includes(cause) : target.role === 'wolfKing' && !['poison', 'explode', 'duel', 'whiteWolf'].includes(cause);
   if (canShoot && !game.hunterUsed.includes(id)) game.pendingHunters.push(id);
-  if (game.sheriffId === id) { game.sheriffId = null; game.pendingBadgeId = id; }
+  if (game.sheriffId === id) game.pendingBadgeId = id;
+  if (!isPendingDeath(game, id)) target.alive = false;
+  return true;
+}
+
+// A single player may have both a shot and a badge. Older snapshots already
+// marked the actor dead when queuing either ability; never revive that seat.
+function finishElimination(game, id, now) {
+  const actor = player(game, id);
+  if (actor?.alive && !isPendingDeath(game, id)) {
+    actor.alive = false;
+    addLog(game, `${actor.seat} 号玩家出局。`, now);
+  }
 }
 function finishOrResume(game, resume, now) {
+  // Count a whole night or ability's eliminations together before offering any death actions.
+  const hasDeathTurn = game.pendingHunters.length || game.pendingBadgeId || game.lastWordsQueue.length;
+  if (checkWinner(game, now, !hasDeathTurn)) return;
   if (game.pendingHunters.length) {
     game.resume = resume;
     setPhase(game, 'hunter', now);
-    const hunter = player(game, game.pendingHunters[0]);
-    hunter.revealed = true;
-    addLog(game, `${hunter.seat} 号玩家发动${ROLE_INFO[hunter.role].name}技能。`, now);
+    addLog(game, '正在结算出局前的行动。', now);
     return;
   }
   if (game.pendingBadgeId) {
@@ -343,7 +372,6 @@ function finishOrResume(game, resume, now) {
     startSpeech(game, 'lastwords', game.lastWordsQueue[0], now);
     return;
   }
-  if (checkWinner(game, now)) return;
   if (resume?.type === 'discussion') startDiscussion(game, now, resume.queue);
   else if (resume === 'discussion') beginDiscussion(game, now);
   else {
@@ -371,22 +399,34 @@ function resolveNight(game, now, resume = 'discussion') {
   // Exactly one of guard protection and witch rescue prevents the wolf kill.
   if (victim && (guards.includes(victim) === saved)) deaths.set(victim, 'wolf');
   for (const id of poisons) deaths.set(id, 'poison');
-  const newlyDead = [...deaths.keys()].filter(id => player(game, id)?.alive);
-  for (const [id, cause] of deaths) eliminate(game, id, cause);
-  if (game.round === 1) game.lastWordsQueue.push(...newlyDead);
-  const seats = [...deaths.keys()].map(id => player(game, id)?.seat).filter(Boolean).sort((a, b) => a - b);
-  addLog(game, seats.length ? `天亮了，昨夜 ${seats.join('、')} 号玩家出局。` : '天亮了，昨夜是平安夜。', now);
+  const casualties = [...deaths].filter(([id, cause]) => eliminate(game, id, cause)).map(([id]) => player(game, id));
+  if (game.round === 1) game.lastWordsQueue.push(...casualties.map(p => p.id));
+  const out = casualties.filter(p => !p.alive).map(p => p.seat).sort((a, b) => a - b);
+  const waiting = casualties.filter(p => p.alive).map(p => p.seat).sort((a, b) => a - b);
+  const reports = [];
+  if (out.length) reports.push(`${out.join('、')} 号玩家出局`);
+  if (waiting.length) reports.push(`${waiting.join('、')} 号玩家遇袭`);
+  addLog(game, reports.length ? `天亮了，昨夜 ${reports.join('，')}。` : '天亮了，昨夜是平安夜。', now);
   finishOrResume(game, resume, now);
 }
-function checkWinner(game, now) {
+function checkWinner(game, now, includeAfkDraw = true) {
   const living = live(game);
   let winner = null;
   if (!living.some(p => isWolfRole(p.role))) winner = 'good';
   else if (game.config.victory === 'all') {
     if (!living.some(p => !isWolfRole(p.role))) winner = 'wolf';
   } else if (!living.some(p => p.role === 'villager') || !living.some(p => !isWolfRole(p.role) && p.role !== 'villager')) winner = 'wolf';
-  if (!winner && living.length && living.every(p => p.afk)) winner = 'draw';
+  if (!winner && includeAfkDraw && living.length && living.every(p => p.afk)) winner = 'draw';
   if (!winner) return false;
+  const pending = game.players.filter(p => isPendingDeath(game, p.id));
+  game.pendingHunters = [];
+  game.pendingBadgeId = null;
+  for (const p of pending) finishElimination(game, p.id, now);
+  if (!player(game, game.sheriffId)?.alive) game.sheriffId = null;
+  game.lastWordsQueue = [];
+  game.speechQueue = [];
+  game.inactivityDeadline = null;
+  game.resume = null;
   game.winner = winner;
   game.phase = 'finished';
   game.deadline = null;
@@ -463,6 +503,7 @@ function finishPhase(game, now) {
     const from = game.pendingBadgeId, to = game.actions[from]?.targetId ?? null;
     game.sheriffId = to; game.pendingBadgeId = null;
     addLog(game, to ? `${targetLabel(game, from)} 将警徽移交给 ${targetLabel(game, to)}。` : `${targetLabel(game, from)} 撕毁警徽，本局不再设警长。`, now);
+    finishElimination(game, from, now);
     const resume = game.resume; game.resume = null; finishOrResume(game, resume, now); return;
   } else if (phase === 'sheriff_direction') {
     const choice = game.actions[game.sheriffId]?.choice ?? 'right';
@@ -514,13 +555,17 @@ function finishPhase(game, now) {
   } else if (phase === 'hunter') {
     const id = game.pendingHunters.shift();
     const targetId = game.actions[id]?.targetId;
-    const shooterName = ROLE_INFO[player(game, id).role].name;
+    const shooter = player(game, id);
+    const roleName = ROLE_INFO[shooter.role].name;
     game.hunterUsed.push(id);
-    if (targetId) {
-      eliminate(game, targetId, 'shot');
+    if (targetId && targetId !== id && eliminate(game, targetId, 'shot')) {
+      shooter.revealed = true;
       if ((game.resume === 'discussion' && game.round === 1) || game.resume === 'night') game.lastWordsQueue.push(targetId);
-      addLog(game, `${shooterName}带走了 ${player(game, targetId).seat} 号玩家。`, now);
-    } else addLog(game, `${shooterName}选择不开枪。`, now);
+      addLog(game, `${shooter.seat} 号${roleName}开枪击中 ${targetLabel(game, targetId)} 玩家。`, now);
+    } else {
+      addAudit(game, `${shooter.seat} 号${roleName}未开枪。`, now);
+    }
+    finishElimination(game, id, now);
     const resume = game.resume;
     game.resume = null;
     finishOrResume(game, resume, now);
@@ -528,9 +573,16 @@ function finishPhase(game, now) {
   } else return;
 }
 
+// Older saved games may already be awaiting a gun, badge, or last words after
+// a winning elimination. End them before accepting or timing out that action.
+function finishWinningDeathTurn(game, now) {
+  return ['hunter', 'sheriff_transfer', 'lastwords'].includes(game.phase) && checkWinner(game, now, false);
+}
+
 /** Advance due night windows together. Newly opened daytime phases receive their full timer. */
 export function advance(game, now = Date.now()) {
   migrateNightConfig(game, now);
+  if (finishWinningDeathTurn(game, now)) return game;
   if (game.phase === 'night') { advanceNight(game, now); return game; }
   if (checkSpeechTimer(game, now)) return game;
   if (game.phase !== 'finished' && now >= game.deadline) finishPhase(game, now);
@@ -544,6 +596,7 @@ function canDuel(game, actor) { return Boolean(actor?.alive && actor.role === 'k
 
 export function act(game, playerId, action, now = Date.now()) {
   migrateNightConfig(game, now);
+  assert(!finishWinningDeathTurn(game, now), '对局已经结束');
   if (game.phase === 'night') {
     advanceNight(game, now);
     assert(game.phase === 'night', '该阶段已结束，请刷新对局状态');
@@ -611,13 +664,13 @@ export function act(game, playerId, action, now = Date.now()) {
     (game.knightUsed ??= []).push(actor.id); actor.revealed = true;
     if (isWolfRole(target.role)) {
       target.revealed = true; eliminate(game, target.id, 'duel');
-      addLog(game, `${actor.seat} 号骑士决斗 ${target.seat} 号，目标是狼人并出局，直接入夜。`, now);
+      addLog(game, `${actor.seat} 号骑士决斗 ${target.seat} 号，目标是狼人，结算后入夜。`, now);
       game.speechQueue = []; game.lastWordsQueue = [];
       finishOrResume(game, 'night', now);
     } else {
       const resume = { type: 'discussion', queue: game.speechQueue.filter(id => id !== actor.id) };
       eliminate(game, actor.id, 'duel');
-      addLog(game, `${actor.seat} 号骑士决斗 ${target.seat} 号，目标是好人，骑士出局；继续发言。`, now);
+      addLog(game, `${actor.seat} 号骑士决斗 ${target.seat} 号，目标是好人，骑士按决斗规则退场，结算后继续发言。`, now);
       finishOrResume(game, resume, now);
     }
     return game;
@@ -634,7 +687,7 @@ export function act(game, playerId, action, now = Date.now()) {
   const targetId = action.targetId ?? null;
   assert(targetId === null || typeof targetId === 'string', '目标编号不正确');
   const target = targetId === null ? null : player(game, targetId);
-  assert(targetId === null || (target && target.alive), '请选择仍在场的玩家');
+  assert(targetId === null || isStanding(game, target), '请选择仍在场的玩家');
   if (actionPhase === 'guard') assert(targetId === null || targetId !== actor.previousGuard, '不能连续两晚守护同一名玩家');
   if (actionPhase === 'seer') assert(targetId !== playerId, '不能查验自己');
   if (game.phase === 'vote') {
@@ -682,10 +735,28 @@ export function viewGame(game, viewerId) {
   const canPass = viewerId !== null && SPEECH_PHASES.includes(game.phase) && game.currentSpeakerId === viewerId;
   const turn = nightTurn(game, viewer);
   const actionable = canPass || (eligible(game).includes(viewerId) && (!submitted || Boolean(turn) || VOTE_PHASES.includes(game.phase)));
-  const publicPlayer = p => ({ id: p.id, name: p.name, seat: p.seat, alive: p.alive,
-    ...(p.foolRevealed ? { foolRevealed: true } : {}),
-    ...(game.phase === 'finished' || p.revealed || p.id === viewerId || (isWolfRole(viewer.role) && isWolfRole(p.role)) ? { role: p.role } : {}),
-  });
+  const publicPlayer = p => {
+    const publicRole = game.phase === 'finished' || p.revealed || p.foolRevealed;
+    const knowsRole = publicRole || p.id === viewerId || (isWolfRole(viewer.role) && isWolfRole(p.role));
+    return {
+      id: p.id, name: p.name, seat: p.seat, alive: p.alive, afk: Boolean(p.afk),
+      ...(p.foolRevealed ? { foolRevealed: true } : {}),
+      ...(knowsRole ? { role: p.role } : {}),
+      ...(publicRole ? { publicRole: p.role } : {}),
+    };
+  };
+  let visiblePhase = game.phase;
+  const nightStages = publicNightStages(game);
+  let phaseLabel = nightStages.length ? nightStages.map(stage => stage.label).join('、') : LABELS[game.phase];
+  if (game.phase === 'hunter') {
+    const shooter = player(game, game.pendingHunters[0]);
+    if (shooter && (shooter.id === viewerId || shooter.revealed)) {
+      phaseLabel = ROLE_INFO[shooter.role].name + '开枪';
+    } else {
+      visiblePhase = 'resolution';
+      phaseLabel = '技能结算';
+    }
+  }
   let action = null;
   const actionPhase = turn?.role ?? game.phase;
   const privateInfo = {};
@@ -722,8 +793,8 @@ export function viewGame(game, viewerId) {
     }
   }
   return {
-    config: { ...game.config, roles: { ...game.config.roles } }, phase: game.phase, phaseLabel: game.phase === 'hunter' ? `${ROLE_INFO[player(game, game.pendingHunters[0])?.role]?.name ?? '玩家'}开枪` : LABELS[game.phase], round: game.round,
-    deadline: game.phase === 'night' ? game.deadline + game.night.windows.at(-1).offset : game.deadline, winner: game.winner, players: game.players.map(publicPlayer), myRole: viewer.role,
+    config: { ...game.config, roles: { ...game.config.roles } }, phase: visiblePhase, phaseLabel, round: game.round,
+    nightStages, deadline: game.deadline, winner: game.winner, players: game.players.map(publicPlayer), myRole: viewer.role,
     log: (game.phase === 'finished' ? [...game.log, ...game.audit].sort((a, b) => a.at - b.at || a.seq - b.seq) : game.log).map(({ round, text, at }) => ({ round, text, at })), actionable, submitted, action, privateInfo,
     currentSpeakerId: game.currentSpeakerId, canSpeak: canChat(game, viewerId), canWolfChat: canChat(game, viewerId, 'wolf'),
     myAfk: Boolean(viewer.afk),

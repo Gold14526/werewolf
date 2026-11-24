@@ -181,6 +181,32 @@ body {
 .lg-background { overflow: visible; margin-bottom: 0; padding-bottom: 20px; border-radius: 4px 4px 0 0; box-shadow: 0 -1px 5px #27364a04; }
 .lg-background + .lg-statement { border-radius: 0 0 4px 4px; padding-top: 12px; }
 .lg-background-intro { margin: -4px 0 12px; color: #555; font-size: 14px; }
+/* Disclosure within the problem background, separate from the sidebar panels. */
+.lg-game-fold {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid #dce2e8;
+  border-radius: 4px;
+}
+.lg-game-fold > .lg-game-disclosure {
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 3px;
+  background: #f6f8fa;
+  text-align: left;
+}
+.lg-game-content {
+  min-width: 0;
+  padding: clamp(6px, 1vw, 12px);
+  border-top: 1px solid #e1e5ec;
+}
+.lg-game-content[hidden] { display: none; }
+.lg-game-content .lg-game-toolbar > label,
+.lg-game-content #switch-room { min-width: 0; max-width: 100%; }
+
 .lg-background .room-status {
   padding: 9px 11px;
   margin-bottom: 12px;
@@ -222,12 +248,13 @@ body {
 .lg-background .seat.empty { border-style: dashed; background: #fafbfd; }
 .lg-background .seat.dead { opacity: .55; }
 .lg-background .seat-number { left: 6px; top: 5px; font-size: 11px; font-weight: 400; color: #82909b; }
-.lg-background .seat-role { top: 5px; right: 4px; }
-.lg-background .seat-role .badge { max-width: 55px; overflow: hidden; text-overflow: ellipsis; font-size: 9px; }
+.lg-background .seat-role { top: 5px; right: 4px; display: flex; max-width: calc(100% - 26px); pointer-events: none; }
+.lg-background .seat-role .badge { max-width: 55px; padding: 1px 3px; overflow: hidden; text-overflow: ellipsis; font-size: 9px; }
 .lg-background .seat-name { font-size: 12px; font-weight: 400; color: #555; }
 .lg-background .seat.me .seat-name { color: #2980b9; }
 .lg-background .seat.empty .seat-name { color: #aaa; }
 .lg-background .seat-status { font-size: 11px; min-height: 18px; }
+.lg-background .seat-status .afk { background: #865514; color: #fff; }
 .lg-background .avatar { width: 36px; height: 36px; margin: 0 auto 5px; font-size: 18px; overflow: hidden; }
 .lg-background .avatar svg,
 .lg-background .avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }

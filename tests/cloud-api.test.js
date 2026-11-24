@@ -184,7 +184,12 @@ test('cloud API advances persisted deadlines and lets outsiders read finished pu
   const c = setup(t, { CLOCK: () => now });
   const { people, code } = await makeGame(c, 'public');
   const before = (await c.request('/api/room', { token: people[0].token })).data.room;
-  now = before.game.deadline;
+  let phase = before.game;
+  for (const label of ['狼人行动', '预言家行动', '女巫行动']) {
+    assert.equal(phase.phaseLabel, label);
+    now = phase.deadline;
+    phase = (await c.request('/api/room', { token: people[0].token })).data.room.game;
+  }
   const advanced = (await c.request('/api/room', { token: people[0].token })).data.room;
   assert.equal(advanced.game.phase, 'discussion');
   assert.ok(advanced.game.deadline > Date.now());

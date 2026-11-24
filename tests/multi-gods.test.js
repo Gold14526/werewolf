@@ -23,12 +23,26 @@ function finishDay(g) {
   advance(g, g.deadline);
 }
 
-test("only the two special wolf roles remain limited to one; total and balance limits still apply", () => {
+test("special wolf roles may repeat within the room size and wolf team limits", () => {
   const g = game();
   for (const [r, count] of Object.entries(deck)) assert.equal(role(g, r).length, count);
-  for (const key of ["wolfKing", "whiteWolfKing"]) assert.throws(() => validateConfig({ roles: { ...deck, [key]: 2 } }));
+  for (const key of ["wolfKing", "whiteWolfKing"]) assert.equal(validateConfig({ roles: { ...deck, [key]: 2 } }).roles[key], 2);
   assert.throws(() => validateConfig({ roles: { ...deck, seer: 6 } }));
   assert.throws(() => validateConfig({ roles: { wolf: 3, guard: 2, villager: 1 } }));
+});
+
+test("a whole-town game with no villagers and multiple wolf kings continues through the first dawn", () => {
+  const roles = { wolfKing: 2, whiteWolfKing: 2, seer: 5, villager: 0 };
+  assert.throws(() => validateConfig({ roles, victory: "side" }), /村民/);
+  const players = Array.from({ length: 9 }, (_, n) => ({ id: "p" + n, name: "玩家" + n }));
+  const g = createGame(players, { roles, victory: "all" }, { now: 1000, random: () => 0.99 });
+  assert.equal(role(g, "villager").length, 0);
+  assert.equal(role(g, "wolfKing").length, 2);
+  assert.equal(role(g, "whiteWolfKing").length, 2);
+  for (const wolf of g.players.slice(0, 4)) assert.equal(view(g, wolf).action.type, "wolf");
+  while (g.phase === "night") advance(g, g.deadline);
+  assert.equal(g.phase, "discussion");
+  assert.equal(g.winner, null);
 });
 
 test("each guard locks their final selection, then only their own preceding target is forbidden", () => {

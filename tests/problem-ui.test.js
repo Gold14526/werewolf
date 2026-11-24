@@ -270,7 +270,7 @@ test('提交评测 is inert even with a real vote selected and a live room', asy
 test('night action controls and wolf chat exist only in 提交文件; code area stays independent', async () => {
   const ui = await frontend();
   const deadline=Date.now()+60000;
-  ui.putInRoom(gameView({ phase:'night',phaseLabel:'夜间',myRole:'wolfKing',canWolfChat:true,deadline:deadline+90000,
+  ui.putInRoom(gameView({ phase:'night',phaseLabel:'狼人行动',myRole:'wolfKing',canWolfChat:true,deadline,
     action:{type:'wolf',deadline,targets:[{id:'target',name:'目标玩家',seat:2}]} }));
   assert.match(ui.html(), /data-do="night-actions"/);
   assert.doesNotMatch(ui.html(), /data-chat="wolf"|data-action="confirm"/);
@@ -361,10 +361,10 @@ test('closing the ad survives renders without making a request', async () => {
 
 test('witch confirms the actual victim for antidote and can replace it with a poison or a pass before deadline', async () => {
   const ui=await frontend();
-  const witch=gameView({phase:'night',phaseLabel:'夜间',myRole:'witch'});
+  const witch=gameView({phase:'night',phaseLabel:'女巫行动',myRole:'witch'});
   const victim=witch.players[1];
   witch.privateInfo={nightVictim:victim,potions:{save:true,poison:true}};
-  witch.action={type:'witch',targets:witch.players.filter(p=>p.alive),choices:['skip','save','poison'],deadline:witch.deadline-30000};
+  witch.action={type:'witch',targets:witch.players.filter(p=>p.alive),choices:['skip','save','poison'],deadline:witch.deadline};
   ui.putInRoom(witch);
   assert.equal((ui.html().match(/data-deadline="/g)||[]).length,1);
   assert.doesNotMatch(ui.html(),/今夜被刀|使用解药|用毒目标/);
@@ -545,4 +545,44 @@ test('a room poll appends to the mounted feed without interim scroll, detach, or
     assert.deepEqual(pageScrolls,[]);
     assert.deepEqual(feedScrolls,[400], 'only a pinned feed that receives a new last message follows it');
   }
+});
+
+test('the background game disclosure keeps lobby, seats, phase prompts and AFK controls together', async () => {
+  const ui = await frontend();
+  const open = () => /data-do="toggle-game-area" aria-expanded="true" aria-controls="game-area-content"/.test(ui.html());
+  assert.ok(open());
+  assert.match(ui.html(), /type="button" id="toggle-game-area"/);
+  assert.match(ui.html(), /data-do="match"/);
+  let focused = 0;
+  ui.field('toggle-game-area', {focus(options) { assert.equal(options.preventScroll,true); focused++; }});
+  await ui.click({do:'toggle-game-area'});
+  assert.equal(focused,1);
+  assert.equal(open(),false);
+  assert.match(ui.html(), /id="game-area-content" class="lg-game-content" hidden><\/div>/);
+  assert.doesNotMatch(ui.html(), /data-do="match"|data-do="join-modal"|data-do="create"|class="seats"/);
+  assert.match(ui.html(), /题目背景[\s\S]*?本题为交互题/);
+  assert.match(ui.html(), /class="lg-statement|lg-statement-connected/);
+  assert.match(ui.html(), /相关讨论/);
+  assert.match(ui.html(), /推荐题目/);
+
+  const view = gameView({myAfk:true,canSpeak:false});
+  ui.putInRoom(view);
+  await ui.click({sidebarToggle:'discussion'});
+  const changed = json(ui.app.state.room);
+  changed.game.phase = 'discussion';
+  changed.messages.push({name:'玩家',seat:2,text:'折叠期间收到的发言',at:Date.now()});
+  ui.setServerRoom(changed);
+  await ui.app.refreshData();
+  assert.equal(open(),false);
+  assert.doesNotMatch(ui.html(), /class="seats"|class="room-status"|data-do="return"/);
+  assert.match(ui.html(), /折叠期间收到的发言/);
+  await ui.click({problemTab:'submit'});
+  assert.match(ui.html(), /id="code-editor"/);
+  await ui.click({problemTab:'description'});
+  assert.equal(open(),false);
+  await ui.click({do:'toggle-game-area'});
+  assert.ok(open());
+  assert.match(ui.html(), /class="seats"/);
+  assert.match(ui.html(), /data-do="return">回到游戏/);
+  assert.match(ui.html(), /class="room-status"/);
 });

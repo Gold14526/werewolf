@@ -33,6 +33,8 @@ test('white king election carry suppresses a pending night victim gun without sw
   submit(g, white.id, { type: 'explode', targetId: hunter.id });
   assert.equal(hunter.alive, false);
   assert.equal(seer.alive, false);
+  assert.equal(viewGame(g, null).players.find(p => p.id === hunter.id).publicRole, undefined);
+  assert.equal(viewGame(g, null).players.find(p => p.id === white.id).publicRole, 'whiteWolfKing');
   assert.equal(g.sheriffElectionDone, true);
   assert.equal(g.sheriffId, null);
   assert.deepEqual(g.pendingHunters, []);
@@ -42,26 +44,94 @@ test('white king election carry suppresses a pending night victim gun without sw
   assert.ok(g.phase === 'night');
 });
 
+test('an unannounced first-night death is indistinguishable from no attack throughout the sheriff election', () => {
+  const attacked = game(), safe = game();
+  const victim = role(attacked, 'hunter'), candidate = role(attacked, 'fool');
+  night(attacked, victim.id);
+  night(safe);
+  const viewers = [null, victim.id, candidate.id, role(attacked, 'villager').id];
+  const checkViews = () => {
+    for (const id of viewers) assert.deepEqual(viewGame(attacked, id), viewGame(safe, id));
+  };
+  checkViews();
+  for (const g of [attacked, safe]) signup(g, [victim.id, candidate.id]);
+  checkViews();
+  for (const g of [attacked, safe]) {
+    while (g.phase === 'sheriff_speech') submit(g, g.currentSpeakerId, { type: 'pass' });
+    assert.equal(g.phase, 'sheriff_vote');
+  }
+  checkViews();
+});
+
 test('newly elected night-dead hunter sheriff resolves a wolf king gun chain before transferring once', () => {
   const g = game(), hunter = role(g, 'hunter'), king = role(g, 'wolfKing'), fool = role(g, 'fool'), knight = role(g, 'knight');
   night(g, hunter.id);
   signup(g, [hunter.id]);
   assert.equal(g.phase, 'hunter');
+  assert.equal(hunter.alive, true);
   assert.equal(viewGame(g, hunter.id).actionable, true);
+  assert.equal(viewGame(g, hunter.id).phase, 'hunter');
+  assert.equal(viewGame(g, hunter.id).phaseLabel, '猎人开枪');
+  for (const viewer of [null, fool.id]) {
+    const v = viewGame(g, viewer);
+    assert.equal(v.phase, 'resolution');
+    assert.equal(v.phaseLabel, '技能结算');
+    assert.equal(v.players.find(p => p.id === hunter.id).role, undefined);
+    assert.doesNotMatch(v.log.map(m => m.text).join(' '), /猎人|狼王/);
+  }
   submit(g, hunter.id, { type: 'hunter', targetId: king.id });
   assert.equal(g.phase, 'hunter');
   assert.match(viewGame(g, king.id).phaseLabel, /狼王/);
+  const gallery = viewGame(g, null);
+  assert.equal(gallery.players.find(p => p.id === hunter.id).publicRole, 'hunter');
+  assert.equal(gallery.players.find(p => p.id === king.id).publicRole, undefined);
+  assert.equal(hunter.alive, true, 'the shooter still owes a badge transfer');
+  assert.equal(king.alive, true);
+  assert.ok(viewGame(g, king.id).action.targets.every(p => p.id !== hunter.id && p.id !== king.id));
+  assert.throws(() => submit(g, king.id, { type: 'hunter', targetId: hunter.id }));
   submit(g, king.id, { type: 'hunter', targetId: fool.id });
   assert.equal(g.phase, 'sheriff_transfer');
+  assert.equal(hunter.alive, true);
+  assert.equal(king.alive, false);
+  assert.equal(viewGame(g, null).players.find(p => p.id === king.id).publicRole, 'wolfKing');
   assert.equal(viewGame(g, hunter.id).actionable, true);
   assert.equal(viewGame(g, king.id).actionable, false);
   assert.ok(viewGame(g, hunter.id).action.targets.every(p => ![hunter.id, king.id, fool.id].includes(p.id)));
   submit(g, hunter.id, { type: 'sheriff_transfer', targetId: knight.id });
+  assert.equal(hunter.alive, false);
   finishWords(g);
   assert.equal(g.phase, 'sheriff_direction');
   assert.equal(g.sheriffId, knight.id);
   assert.equal(g.pendingBadgeId, null);
   assert.deepEqual(new Set(g.hunterUsed), new Set([hunter.id, king.id]));
+});
+
+test('a badge transferred after a gun chain may be transferred again by its next holder', () => {
+  const g = game(), hunter = role(g, 'hunter'), king = role(g, 'wolfKing'), knight = role(g, 'knight');
+  const heir = role(g, 'villager');
+  night(g, hunter.id);
+  signup(g, [king.id]);
+  submit(g, hunter.id, { type: 'hunter', targetId: king.id });
+  assert.equal(hunter.alive, false);
+  assert.equal(king.alive, true);
+  submit(g, king.id, { type: 'hunter', targetId: null });
+  assert.equal(g.phase, 'sheriff_transfer');
+  assert.equal(king.alive, true);
+  assert.equal(viewGame(g, null).players.find(p => p.id === king.id).publicRole, undefined);
+  submit(g, king.id, { type: 'sheriff_transfer', targetId: knight.id });
+  assert.equal(king.alive, false);
+  assert.equal(g.sheriffId, knight.id);
+  finishWords(g);
+  submit(g, knight.id, { type: 'sheriff_direction', choice: 'right' });
+  submit(g, knight.id, { type: 'duel', targetId: heir.id });
+  assert.equal(knight.alive, true);
+  assert.equal(g.phase, 'sheriff_transfer');
+  assert.throws(() => submit(g, king.id, { type: 'sheriff_transfer', targetId: heir.id }));
+  submit(g, knight.id, { type: 'sheriff_transfer', targetId: heir.id });
+  assert.equal(knight.alive, false);
+  assert.equal(g.sheriffId, heir.id);
+  assert.equal(g.pendingBadgeId, null);
+  assert.equal(g.phase, 'discussion');
 });
 
 test('failed sheriff knight duel transfers badge and preserves the interrupted speech queue', () => {
@@ -73,8 +143,10 @@ test('failed sheriff knight duel transfers badge and preserves the interrupted s
   assert.notEqual(speaker, knight.id);
   submit(g, knight.id, { type: 'duel', targetId: target.id });
   assert.equal(g.phase, 'sheriff_transfer');
+  assert.equal(knight.alive, true);
   assert.equal(target.alive, true);
   submit(g, knight.id, { type: 'sheriff_transfer', targetId: target.id });
+  assert.equal(knight.alive, false);
   assert.equal(g.phase, 'discussion');
   assert.deepEqual(g.speechQueue, queue.filter(id => id !== knight.id));
   assert.equal(g.currentSpeakerId, speaker);

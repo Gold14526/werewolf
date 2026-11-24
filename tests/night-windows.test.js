@@ -9,7 +9,13 @@ const member = (g, role) => g.players.find(p => p.role === role);
 const view = (g, role) => viewGame(g, member(g, role).id);
 const choose = (g, role, targetId, at, choice) => act(g, member(g, role).id, { type: role, targetId, choice }, at);
 
-test('night roles act in order with a single public dawn deadline', () => {
+const stageLabels = { guard: '守卫行动', wolf: '狼人行动', seer: '预言家行动', witch: '女巫行动' };
+
+function stage(type, deadline) {
+  return { type, label: stageLabels[type], deadline };
+}
+
+test('night roles act in order with the current role and its deadline public', () => {
   const g = game({ otherNightSeconds: 40 });
   const villager = member(g, 'villager');
   const stages = [
@@ -34,7 +40,14 @@ test('night roles act in order with a single public dawn deadline', () => {
     advance(g, end - 1);
     const v = view(g, 'villager');
     assert.equal(v.phase, 'night');
-    assert.equal(v.deadline, 196000);
+    assert.equal(v.deadline, end);
+    assert.equal(v.phaseLabel, stageLabels[role]);
+    assert.deepEqual(v.nightStages, [stage(role, end)]);
+    const observer = viewGame(g, null);
+    assert.deepEqual(observer.nightStages, v.nightStages);
+    assert.equal(observer.deadline, end);
+    assert.equal(observer.action, null);
+    assert.deepEqual(observer.privateInfo, {});
     assert.equal(v.action, null);
     assert.deepEqual(v.privateInfo, {});
   }
@@ -55,15 +68,25 @@ test('a persisted parallel night completes as scheduled, then starts the next ni
   choose(snapshot, 'seer', victim, 5000);
   const g = JSON.parse(JSON.stringify(snapshot));
   advance(g, 20000);
+  const watching = viewGame(g, null);
+  assert.deepEqual(watching.nightStages, [stage('guard', 31000), stage('wolf', 76000), stage('seer', 31000)]);
+  assert.equal(watching.phaseLabel, '守卫行动、狼人行动、预言家行动');
+  assert.equal(watching.deadline, 31000);
+  assert.equal(watching.action, null);
+  assert.deepEqual(watching.privateInfo, {});
+  assert.equal(view(g, 'wolf').action.deadline, 76000);
   assert.equal(view(g, 'guard').actionable, true);
   assert.equal(view(g, 'wolf').submitted, true);
   assert.equal(view(g, 'seer').submitted, true);
   advance(g, 31000);
+  assert.deepEqual(viewGame(g, null).nightStages, [stage('wolf', 76000)]);
   assert.equal(view(g, 'seer').privateInfo.results[0].id, victim);
   advance(g, 76000);
+  assert.deepEqual(viewGame(g, null).nightStages, [stage('witch', 106000)]);
   assert.equal(view(g, 'witch').privateInfo.nightVictim.id, victim);
   choose(g, 'witch', victim, 76001, 'save');
   advance(g, 106000);
+  assert.deepEqual(viewGame(g, null).nightStages, []);
   while (g.currentSpeakerId) act(g, g.currentSpeakerId, { type: 'pass' }, 106001);
   advance(g, g.deadline);
   assert.equal(g.round, 2);
@@ -122,6 +145,7 @@ test('old night upgrades in place using elapsed time, preserves submitted action
     assert.equal(g.config.shuffleSeats, false);
     assert.equal(g.config.otherNightSeconds, 30);
     assert.equal(g.config.nightSeconds, 75);
+    assert.deepEqual(viewGame(g, null).nightStages, [stage(role, role === 'wolf' ? 76000 : 31000)]);
     assert.equal(g.config.witchSelfSave, 'first');
     assert.equal(migrateNightConfig(g, 12000), false);
     if (role === 'witch') {
@@ -135,7 +159,12 @@ test('old night upgrades in place using elapsed time, preserves submitted action
     const reloaded = JSON.parse(JSON.stringify(g));
     reloaded.deadline += 8000;
     assert.equal(view(reloaded, 'villager').deadline, publicEnd + 8000);
-    advance(reloaded, publicEnd + 8000);
+    const order = ['guard', 'wolf', 'seer', 'witch'];
+    for (const expected of order.slice(order.indexOf(role))) {
+      const current = viewGame(reloaded, null);
+      assert.deepEqual(current.nightStages, [stage(expected, current.deadline)]);
+      advance(reloaded, current.deadline);
+    }
     assert.notEqual(reloaded.phase, 'night');
     if (role === 'witch') {
       assert.equal(view(reloaded, 'witch').privateInfo.potions.save, false);
@@ -158,7 +187,7 @@ test('optional opening seat shuffle preserves all players and roles without chan
 
 test('the other action duration covers non-speech daytime actions and migrates old votes once', () => {
   const g = game({ otherNightSeconds: 40, sheriff: true });
-  advance(g, view(g, 'villager').deadline);
+  while (g.phase === 'night') advance(g, view(g, 'villager').deadline);
   assert.equal(g.phase, 'sheriff_signup');
   assert.equal(g.deadline, 236000);
   const old = game();
@@ -167,4 +196,38 @@ test('the other action duration covers non-speech daytime actions and migrates o
   assert.equal(old.deadline, 31000);
   assert.equal(migrateNightConfig(old, 12000), false);
   assert.equal(old.deadline, 31000);
+});
+
+test('every wolf and other timer setting gives all seats and observers the exact current interval', () => {
+  for (const nightSeconds of [60, 75, 90]) for (const otherNightSeconds of [30, 40, 50]) {
+    const g = game({ nightSeconds, otherNightSeconds });
+    let end = 1000;
+    for (const role of ['guard', 'wolf', 'seer', 'witch']) {
+      end += 1000 * (role === 'wolf' ? nightSeconds : otherNightSeconds);
+      for (const id of [null, ...g.players.map(p => p.id)]) {
+        const v = viewGame(g, id);
+        assert.equal(v.deadline, end);
+        assert.deepEqual(v.nightStages, [stage(role, end)]);
+        assert.equal(v.phaseLabel, stageLabels[role]);
+      }
+      advance(g, end - 1);
+      assert.equal(viewGame(g, null).deadline, end);
+      advance(g, end);
+    }
+    assert.equal(g.phase, 'discussion');
+    assert.deepEqual(viewGame(g, null).nightStages, []);
+  }
+});
+
+test('only configured stages appear, even if everyone with that role has died', () => {
+  const g = game({ roles: { wolfKing: 1, seer: 1, villager: 5 } });
+  const seer = member(g, 'seer');
+  seer.alive = false;
+  assert.deepEqual(viewGame(g, null).nightStages, [stage('wolf', 76000)]);
+  advance(g, 76000);
+  assert.deepEqual(viewGame(g, null).nightStages, [stage('seer', 106000)]);
+  for (const p of g.players) assert.equal(viewGame(g, p.id).action, null);
+  advance(g, 106000);
+  assert.equal(g.phase, 'discussion');
+  assert.deepEqual(viewGame(g, null).nightStages, []);
 });

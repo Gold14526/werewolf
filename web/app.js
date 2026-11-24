@@ -11,7 +11,7 @@ const sessionStore = {get(key){try{return sessionStorage.getItem(`moonwolf:${key
 const defaultApi = (window.MOONWOLF_CONFIG?.apiBase || '').replace(/\/+$/, '');
 const state = {
   problemTab:'description', submitTab:'code', codeDraft:storage.get('codeDraft',''), codeLanguage:storage.get('codeLanguage','cpp17'), codeSelection:{start:0,end:0,top:0,left:0},
-  sidebar:{tags:false, discussion:false, recommendations:false}, identityScope:null, adDismissed:false,
+  sidebar:{tags:false, discussion:false, recommendations:false}, gameAreaOpen:true, identityScope:null, adDismissed:false,
   page:'lobby', name:storage.get('name','玩家'+Math.floor(1000+Math.random()*9000)),
   apiBase:(storage.get('apiBase') || defaultApi).replace(/\/+$/,''),
   token:'', player:null, online:false, checking:true, room:null, memberships:[], rooms:[], history:[], standings:[],
@@ -34,16 +34,16 @@ function modal(title,body){state.modal=title;$('#modal-root').innerHTML=`<div cl
 function closeModal(){state.modal=null;state.skill=null;$('#modal-root').innerHTML='';}
 function rules(){return `<ol class="rules-list">
   <li><strong>身份：</strong>默认 12 人标准局，${roleTags(STANDARD_CONFIG)}。开局随机分配身份；狼人知道同伴，其他玩家只知道自己。</li>
-  <li><strong>天黑：</strong>守卫、狼人、预言家、女巫依次行动。同一身份有多人时，每人独立确认自己的行动，截止前可改选或放弃。狼人可在队内频道讨论，选择袭击目标；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
+  <li><strong>天黑：</strong>守卫、狼人、预言家、女巫依次行动。玩家和观战者都可以在题目背景或提交文件中看到当前阶段和剩余时间。同一身份有多人时，每人独立确认自己的行动，截止前可改选或放弃。狼人可在队内频道讨论，选择袭击目标；预言家独自获知查验结果。已配置的夜间阶段保留固定时长，不因对应身份出局而跳过。未操作至超时视为放弃。</li>
   <li><strong>女巫与守卫：</strong>每名女巫各有一瓶解药和一瓶毒药，每晚最多用一瓶，标准局仅首夜被刀可自救，开房可调整；守卫不能连续守同一人。同守同救仍会死亡。</li>
   <li><strong>天亮：</strong>公布死亡玩家，不公开身份。首夜死者可发表遗言；随后存活玩家依次发言，只有当前玩家可以发送，可点击「结束发言」。未轮到时可先写草稿。轮到时连续 60 秒未键入会被判定为挂机，此后每次发言只有 2 秒，点击「回到游戏」可恢复。</li>
   <li><strong>投票：</strong>具有投票权的存活玩家同时投票，点击头像即可投给该玩家，截止前可随时改票或弃权，不能投自己；警长放逐票计 1.5 票。投票结束后公布票型；平票玩家再发言并重新投票，再次平票则无人出局。</li>
   <li><strong>猎人：</strong>被袭击或放逐后可开枪带走一人；被女巫毒杀或白狼王带走不能开枪。<strong>狼人自爆：</strong>普通狼人和狼王可在白天发言、投票或警上发言时自爆，立即出局并结束当天。</li>
-  <li><strong>狼王与白狼王：</strong>两者都参与夜间袭击和狼人队内交流。狼王出局可开枪，但被毒杀、自爆、骑士决斗或白狼王带走时不能开枪。白狼王仅在白天或警上发言阶段可自爆并带走一名玩家，也可选择只自爆；非自爆出局不能带人。白狼王及其带走的玩家没有遗言，被带走者不能发动死亡技能。</li>
+  <li><strong>狼王与白狼王：</strong>开房时均可配置多名，每人独立发动自己的技能。两者都参与夜间袭击和狼人队内交流。狼王出局可开枪，但被毒杀、自爆、骑士决斗或白狼王带走时不能开枪。白狼王仅在白天或警上发言阶段可自爆并带走一名玩家，也可选择只自爆；非自爆出局不能带人。白狼王及其带走的玩家没有遗言，被带走者不能发动死亡技能。</li>
   <li><strong>愚者：</strong>首次被投票放逐时翻牌免死，仍可发言，之后不能投票，也不能再被投票放逐；夜间袭击、毒药和技能仍可使其出局。翻牌时若持有警徽，警徽流失。</li>
   <li><strong>骑士：</strong>白天发言阶段可发动一次决斗。目标是狼人则目标出局并直接进入黑夜；目标是好人则目标存活、骑士出局，继续白天流程。</li>
   <li><strong>上警：</strong>建房时可勾选开启。首夜结束后先竞选警长，再公布死讯；首夜被袭击的玩家也能参加竞选。报名上警后依次发言，可在投票开始前退水；只有本轮未报名的警下玩家投票，退水玩家不能投票。平票加赛一次，再次平票或全员弃票则本局无警长。警长可选择白天发言方向，并在常规白天最后发言，放逐票计 1.5 票；出局时可移交警徽或撕毁，超时视为撕毁。警上发言期间狼人自爆会中止竞选并使警徽流失，结算首夜死讯后直接进入下一夜。</li>
-  <li><strong>胜负：</strong>狼人全部出局则好人获胜。默认屠边：村民全部出局或神职全部出局，狼人获胜；自定义可选屠城，须淘汰所有好人。其余胜负条件均未达成时，全体存活玩家挂机判平局。超过 20 夜也判平局。</li>
+  <li><strong>胜负：</strong>狼人全部出局则好人获胜。默认屠边：村民全部出局或神职全部出局，狼人获胜；自定义可选屠城，须淘汰所有好人。屠边局至少各有一名村民和神职，屠城局可以没有村民。出局已达成胜利条件时立即结算，例如最后一名狼人是狼王，或屠边局的最后一名神职是猎人，他们出局时均无须等待开枪。其余胜负条件均未达成时，全体存活玩家挂机判平局。超过 20 夜也判平局。</li>
   <li><strong>复盘：</strong>结束后公开所有身份，可查看发言、夜间行动和队内聊天。私密房间的记录仅参与者可查看。本版为文字游戏，房间配置与完整进度均由联机服务保存。</li>
 </ol>`;}
 
@@ -106,8 +106,18 @@ const selfSaveLabels = {none:'不能自救',first:'仅第一晚被刀可以自�
 const CODE_LANGUAGES=[['cpp14','C++14'],['cpp17','C++17'],['cpp20','C++20'],['c','C'],['python3','Python 3'],['java17','Java 17'],['rust','Rust'],['javascript','JavaScript']];
 function syncActionKey(room){
   const g=room?.game,night=currentNightAction(g);
-  const key=g?JSON.stringify([room.code,g.round,g.phase,g.action?.type,g.currentSpeakerId,g.deadline,night?.deadline,night?.selected]):'';
+  const key=g?JSON.stringify([room.code,g.round,g.phase,g.action?.type,g.currentSpeakerId,night?.deadline??g.deadline,night?.selected]):'';
   if(state.actionKey!==key){state.actionKey=key;state.target=night?.selected?.targetId??null;if(state.skill){const submitted=state.skill.submitting;closeModal();if(!submitted)toast('阶段已变化，请重新选择技能目标');}}
+}
+function gameArea(room, awayNotice) {
+  const open = state.gameAreaOpen;
+  return `<div class="lg-game-fold">
+    <button type="button" id="toggle-game-area" class="lg-disclosure lg-game-disclosure"
+      data-do="toggle-game-area" aria-expanded="${open}" aria-controls="game-area-content">
+      <span class="lg-disclosure-arrow" aria-hidden="true"></span>${open ? '收起游戏区域' : '展开游戏区域'}
+    </button>
+    <div id="game-area-content" class="lg-game-content"${open ? '' : ' hidden'}>${open ? awayNotice + (room ? roomBackground(room) : lobbyBackground()) : ''}</div>
+  </div>`;
 }
 function problemPage(room){
   syncActionKey(room);
@@ -116,10 +126,11 @@ function problemPage(room){
     state.sidebar.tags = false;
     state.identityScope = scope;
   }
+  const awayNotice = room&&!state.replay&&room.game?.myAfk&&room.game.phase!=='finished'?'<div class="alert warning">你已被判定为挂机。 <button class="btn primary small" data-do="return">回到游戏</button></div>':'';
   return `<header class="lg-problem-header"><h1>${escape(PROBLEM_TITLE)}</h1><div class="lg-problem-stats"><span class="lg-stat"><span>提交</span><strong>5.29k</strong></span><span class="lg-stat"><span>通过</span><strong>2.59k</strong></span><span class="lg-stat"><span>时间限制</span><strong>4.00s</strong></span><span class="lg-stat"><span>内存限制</span><strong>537.00MB</strong></span></div></header>
-  ${room&&!state.replay&&room.game?.myAfk&&room.game.phase!=='finished'?'<div class="alert warning">你已被判定为挂机。 <button class="btn primary small" data-do="return">回到游戏</button></div>':''}
+  ${state.problemTab === 'submit' ? awayNotice : ''}
   <nav class="lg-problem-tabs" aria-label="题目页签"><button class="${state.problemTab==='description'?'active':''}" data-problem-tab="description" aria-pressed="${state.problemTab==='description'}">题目描述</button><button class="${state.problemTab==='submit'?'active':''}" data-problem-tab="submit" aria-pressed="${state.problemTab==='submit'}">提交答案</button><span class="lg-header-tools"><button type="button" data-do="copy-problem">复制题目链接</button><a href="${ORIGINAL_PROBLEM_URL}" target="_blank" rel="noopener noreferrer" title="前往洛谷 P4899 原题">查看原题</a></span></nav>
-  <div class="lg-layout"><main class="lg-main">${state.problemTab==='submit'?submissionView(room):`<section class="lg-card lg-background"><h2>题目背景</h2><p class="lg-background-intro">本题为交互题，但在此请提交<strong>完整程序</strong>。</p>${room?roomBackground(room):lobbyBackground()}</section><article class="lg-card lg-statement lg-statement-connected">${PROBLEM_CONTENT_HTML}</article>`}</main><aside class="lg-sidebar">${problemMeta()}${tagsPanel(room)}${discussionPanel(room)}${recommendationsPanel()}${sidebarAd()}</aside></div>`;
+  <div class="lg-layout"><main class="lg-main">${state.problemTab==='submit'?submissionView(room):`<section class="lg-card lg-background"><h2>题目背景</h2><p class="lg-background-intro">本题为交互题，但在此请提交<strong>完整程序</strong>。</p>${gameArea(room, awayNotice)}</section><article class="lg-card lg-statement lg-statement-connected">${PROBLEM_CONTENT_HTML}</article>`}</main><aside class="lg-sidebar">${problemMeta()}${tagsPanel(room)}${discussionPanel(room)}${recommendationsPanel()}${sidebarAd()}</aside></div>`;
 }
 
 function problemMeta() {
@@ -149,17 +160,15 @@ function sideSection(key, cssClass, title, show, hide, body, preview = '') {
 function identityPanel(room) {
   const game = room?.game;
   if (!game) return '<p class="muted small">游戏开始后可在此查看自己的身份。</p>';
-  if (state.replay || game.phase === 'finished') {
-    const roles = game.players.filter(p => p.role).map(p => `<li>${p.seat} 号 ${escape(p.name)} · ${badge(p.role)}</li>`).join('');
-    return `<ul class="lg-role-roster">${roles}</ul>`;
-  }
-  if (room.isSpectator || !game.myRole) return '';
+  if (state.replay || game.phase === 'finished' || room.isSpectator || !game.myRole) return '';
+  const privateRole = !game.players.find(p => p.id === state.player?.id)?.publicRole;
   const skills = [
     game.canDuel ? '<button class="btn danger small" data-do="duel">骑士决斗</button>' : '',
     game.canExplode ? `<button class="btn danger small" data-do="explode">${game.myRole === 'whiteWolfKing' ? '白狼王自爆带人' : '狼人自爆'}</button>` : '',
   ].join('');
-  return `<div class="lg-personal-role"><strong>你的身份：</strong>${badge(game.myRole)}
-    <p class="small">${escape(ROLE_INFO[game.myRole]?.description)}</p>${privateInfo(game)}
+  if (!privateRole && !skills && !Object.keys(game.privateInfo||{}).length) return '';
+  return `<div class="lg-personal-role">${privateRole?`<strong>你的身份：</strong>${badge(game.myRole)}
+    <p class="small">${escape(ROLE_INFO[game.myRole]?.description)}</p>`:''}${privateInfo(game)}
     ${skills ? `<div class="controls">${skills}</div>` : ''}</div>`;
 }
 
@@ -214,15 +223,32 @@ function availableTarget(g,id){
   return true;
 }
 function selectTarget(id){const g=state.room?.game;if(!availableTarget(g,id))return false;syncActionKey(state.room);state.target=id;render();return true;}
+function playerStatus(p,game,ready){
+  if(!game)return ready?'<span class="badge good">已准备</span>':'未准备';
+  const labels=[];
+  if(p.alive===false)labels.push('<span class="badge villager">出局</span>');
+  if(p.afk)labels.push('<span class="badge afk">挂机</span>');
+  if(p.alive!==false&&p.id===game.currentSpeakerId)labels.push('<span class="badge good">正在发言</span>');
+  return labels.join(' ')||'存活';
+}
+function phaseClock(g){
+  if(!g?.deadline)return '';
+  const timer=at=>`<strong class="timer" data-deadline="${at}"></strong>`;
+  if(g.phase==='night'&&g.nightStages?.length>1){
+    return `<div class="controls" aria-label="各阶段剩余时间">${g.nightStages.map(s=>`<span>${escape(s.label)} ${timer(s.deadline)}</span>`).join('')}</div>`;
+  }
+  return timer(g.deadline);
+}
 function roomBackground(room){
   const game=room.game,myId=state.player?.id,me=room.players.find(p=>p.id===myId),host=room.hostId===myId;
   const players=game?.players||room.players,capacity=size(room.config),current=game?.players.find(p=>p.id===game.currentSpeakerId),voting=isVoting(game);
   return `<div class="lg-game-toolbar"><strong>${state.replay?'对局回放':'房间'} #${escape(room.code)}</strong>${membershipMenu()}<div><button class="link-button" data-page="lobby">大厅</button> · <button class="link-button" data-page="history">对局历史</button></div></div>${state.demo&&!state.replay?'<div class="alert warning">本地试玩 · 其余座位为随机行动的电脑玩家。</div>':''}
-  <div class="room-status"><div><strong class="status-title">${game?game.phase==='finished'?resultLabel(game.winner):`第 ${game.round} ${NIGHT_PHASES.includes(game.phase)?'夜':'天'} · ${escape(game.phaseLabel)}`:room.matchmaking?'匹配中，等待玩家加入':'等待玩家准备'}</strong><p class="status-detail">${game?game.phase==='finished'?'游戏结束，所有身份与记录已公开。':current?`当前由 ${current.seat} 号 ${escape(current.name)} ${game.phase==='lastwords'?'发表遗言':'发言'}。`:voting?(game.actionable?'点击头像投票，截止前可以改投或弃权。':'等待本轮投票截止。'):NIGHT_PHASES.includes(game.phase)?'夜间行动请打开「提交答案 → 提交文件」。':'可展开「标签」查看身份和技能。':`${escape(room.name)} · ${room.players.length} / ${capacity} 人 · ${room.visibility==='private'?'私密房间':'公开房间'}`}</p></div>${game?.deadline?`<strong class="timer" data-deadline="${game.deadline}"></strong>`:!game?`<div class="controls"><button class="btn secondary small" data-do="copy-room">复制房号</button><button class="btn primary small" data-do="copy-invite">复制邀请链接</button></div>`:''}</div>
+  <div class="room-status"><div><strong class="status-title">${game?game.phase==='finished'?resultLabel(game.winner):`第 ${game.round} ${NIGHT_PHASES.includes(game.phase)?'夜':'天'} · ${escape(game.phaseLabel)}`:room.matchmaking?'匹配中，等待玩家加入':'等待玩家准备'}</strong><p class="status-detail">${game?game.phase==='finished'?'游戏结束，所有身份与记录已公开。':current?`当前由 ${current.seat} 号 ${escape(current.name)} ${game.phase==='lastwords'?'发表遗言':'发言'}。`:voting?(game.actionable?'点击头像投票，截止前可以改投或弃权。':'等待本轮投票截止。'):NIGHT_PHASES.includes(game.phase)?'夜间行动请打开「提交答案 → 提交文件」。':'可展开「标签」查看身份和技能。':`${escape(room.name)} · ${room.players.length} / ${capacity} 人 · ${room.visibility==='private'?'私密房间':'公开房间'}`}</p></div>${game?.deadline?phaseClock(game):!game?`<div class="controls"><button class="btn secondary small" data-do="copy-room">复制房号</button><button class="btn primary small" data-do="copy-invite">复制邀请链接</button></div>`:''}</div>
   <div class="seats">${Array.from({length:capacity},(_,i)=>{
     const p=players.find(x=>x.seat===i+1);if(!p)return `<div class="seat empty"><span class="seat-number">${i+1}</span>${!game&&!state.replay?`<button type="button" class="avatar lg-seat-button" data-seat="${i+1}" aria-label="${me?'换到':'加入'} ${i+1} 号座位">＋</button>`:'<div class="avatar">＋</div>'}<div class="seat-name muted">等待加入</div></div>`;
     const ready=room.players.find(x=>x.id===p.id)?.ready,selectable=voting&&availableTarget(game,p.id),selected=selectable&&game.submitted&&game.myVoteTargetId===p.id;
-    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span><button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${p.alive===false?'<span class="badge villager">出局</span>':game?p.id===game.currentSpeakerId?'<span class="badge good">正在发言</span>':'存活':ready?'<span class="badge good">已准备</span>':'未准备'}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
+    const publicRole=game&&(p.publicRole||(game.phase==='finished'?p.role:null));
+    return `<div class="seat ${p.id===myId?'me':''} ${p.alive===false?'dead':''} ${p.id===game?.currentSpeakerId?'speaking':''} ${selected?'selected':''}"><span class="seat-number">${p.seat}</span>${publicRole?`<span class="seat-role" aria-label="公开身份：${escape(ROLE_INFO[publicRole]?.name||publicRole)}">${badge(publicRole)}</span>`:''}<button type="button" class="avatar lg-seat-button ${selected?'selected':''}" style="--avatar-hue:${(p.seat*47)%360}" ${selectable?`data-target="${escape(p.id)}"`:'disabled'} aria-label="${selectable?'选择投票目标：':''}${p.seat} 号 ${escape(p.name)}" aria-pressed="${selected}">${escape(p.name.slice(0,1))}</button><div class="seat-name">${escape(p.name)}${p.id===myId?'（你）':''}</div><div class="seat-status">${playerStatus(p,game,ready)}${p.id===game?.sheriffId?' <span class="badge sheriff">警长</span>':''}${p.foolRevealed?' <span class="badge villager">已翻牌 · 无投票权</span>':''}${p.id===room.hostId&&!game?' · 房主':''}</div></div>`;
   }).join('')}</div>${game?sheriffPanel(game):''}
   ${game?'':`<div class="config-tags">${roleTags(room.config)}</div><p class="small muted">${room.config.victory==='side'?'屠边':'屠城'} · 狼队 ${room.config.nightSeconds} 秒 · 其它行动 ${room.config.otherNightSeconds??30} 秒 · 女巫${selfSaveLabels[room.config.witchSelfSave??'first']}${room.config.shuffleSeats?' · 开局随机座位':''} · 每人发言 ${room.config.daySeconds} 秒 · ${room.config.sheriff?'开启上警':'不开启上警'}</p>`}
   ${!game?`<div class="controls">${room.isSpectator?'':room.matchmaking?'<span class="queue-count">满员后自动开始</span>':`<button class="btn ${me?.ready?'secondary':'primary'}" data-do="ready">${me?.ready?'取消准备':'准备'}</button>${host?`<button class="btn primary" data-do="start" ${room.players.length<capacity||room.players.some(p=>!p.ready)?'disabled':''}>开始游戏</button>`:''}`}${room.isSpectator?'':'<button class="btn secondary" data-do="observe">加入观战席</button>'}<button class="btn secondary" data-do="leave">${room.matchmaking&&!room.isSpectator?'取消匹配':'离开房间'}</button></div>`:state.replay?'<div class="controls"><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>':game.phase==='finished'?`<div class="controls"><button class="btn primary" data-do="leave">返回大厅</button><button class="btn secondary" data-do="night-actions">查看夜间记录</button></div>`:`${NIGHT_PHASES.includes(game.phase)?'<div class="action-panel"><button class="btn primary" data-do="night-actions">提交答案 → 提交文件</button><p class="small muted">展开「标签」可查看你的身份。</p></div>':actionPanel(game)}<div class="controls">${room.isSpectator?'<button class="btn secondary small" data-do="leave">离开房间</button>':''}${game.canWithdraw?'<button class="btn secondary small" data-do="withdraw">退出竞选（退水）</button>':''}${state.demo?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button><button class="btn secondary small" data-do="leave">退出试玩</button>':''}</div>`}`;
@@ -242,10 +268,8 @@ function codeEditor(){return `<div class="lg-code-editor"><div class="lg-code-to
 function nightActions(room){
   const g=room?.game;
   if(!room)return `<div class="action-panel"><p>加入房间后，可在这里进行夜间行动。</p><button class="btn primary" data-do="join-modal">输入房号加入</button></div>`;
-  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished',action=currentNightAction(g);
-  const deadline=action?.deadline??g?.deadline;
-  const phaseLabel=action?nightLabels[action.type]:g?.phaseLabel;
-  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(phaseLabel):'等待开始'}</strong>${deadline?`<strong class="timer" data-deadline="${deadline}"></strong>`:''}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&!room.isSpectator&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
+  const night=NIGHT_PHASES.includes(g?.phase),finished=g?.phase==='finished';
+  return `<div class="lg-night-actions"><div class="lg-game-toolbar"><strong>房间 #${escape(room.code)} · ${g?escape(g.phaseLabel):'等待开始'}</strong>${phaseClock(g)}</div>${night&&!state.replay?actionPanel(g):`<div class="action-panel"><p>${finished?'对局已结束，夜间行动记录与队内发言已公开。':g?'当前为白天阶段，请返回题目背景操作。':'游戏开始后，夜间行动会显示在这里。'}</p></div>`}${g&&!room.isSpectator&&(isWolfRole(g.myRole)&&night||finished)?chatPanel(room,'wolf'):''}<div class="controls"><button class="btn secondary" data-problem-tab="description">返回题目背景</button>${night&&state.demo&&!state.replay?'<button class="btn secondary small" data-do="demo-next">跳到本阶段结算</button>':''}</div></div>`;
 }
 function captureCodeEditor(){
   const editor=document.getElementById('code-editor');if(!editor)return;
@@ -295,7 +319,7 @@ function actionPanel(g){
   const canPoison=witch&&choices.includes('poison');
   const visibleTargets=witch&&!canPoison?targets.filter(p=>hasAntidote&&p.id===victim.id):targets;
   const buttons=visibleTargets.map(p=>`<button type="button" class="target ${state.target===p.id?'selected':''}" data-target="${escape(p.id)}" aria-pressed="${state.target===p.id}">${p.seat} 号 ${escape(p.name)}</button>`).join('');
-  const header=transfer?'移交或撕毁警徽':'选择目标';
+  const header=transfer?'移交或撕毁警徽':night&&g.nightStages?.length>1?nightLabels[night.type]+' · 选择目标':'选择目标';
   return `<div class="action-panel"><strong>${night?header:`${escape(g.phaseLabel)} · ${header}`}</strong>
     ${night?confirmedNightChoice(g):''}
     ${transfer?'<p>选择一位存活玩家接任警长，或撕毁警徽。</p>':''}
@@ -656,7 +680,7 @@ async function mutation(path,data={}){
 function settingsModal(){modal('联机设置',`<p class="muted">填写游戏服务器的完整地址。所有玩家使用同一服务器，即可共享匹配队列与房间。</p><form id="settings-form"><label class="field"><span>服务器地址</span><input id="api-base" class="input" type="url" value="${escape(state.apiBase)}" placeholder="https://your-server.example.com"><small class="muted">留空使用网站的默认服务器。</small></label><p class="form-error" id="settings-error"></p><button class="btn primary" type="submit">保存并连接</button></form>`);}
 function profileModal(){modal('设置玩家昵称',`<form id="profile-form"><label class="field"><span>昵称（1–16 字）</span><input class="input" id="player-name" value="${escape(state.name)}" maxlength="16" required></label><p class="small muted">同一浏览器标签页会保留你的座位；游戏进行中不能修改昵称。</p><p class="form-error" id="profile-error"></p><button class="btn primary" type="submit">保存昵称</button></form>`);}
 function joinModal(code=state.pendingInvite||''){modal(code?'加入好友房间':'输入房号加入',`<form id="join-form"><label class="field"><span>6 位随机房号</span><input class="input room-code-input" id="join-code" name="code" value="${escape(code)}" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="请输入 6 位数字" required></label><p class="small muted">你将以「${escape(state.name)}」加入。可在页面右上角修改昵称。</p><p class="form-error" id="join-error"></p><button class="btn primary full" type="submit">加入房间</button></form>`);}
-function createModal(){state.config=copy(STANDARD_CONFIG);modal('自选配置开房',`<form id="create-form"><label class="field"><span>房间名称</span><input id="room-name" class="input" value="${escape(state.name)}的房间" maxlength="30" required></label><div class="config-total"><strong>角色配置 · 共 <span id="total-count">12</span> 人</strong><button type="button" class="link-button" data-do="reset-config">恢复标准局</button></div><div class="role-counters">${roleKeys.map(r=>`<div class="counter-item"><span title="${escape(ROLE_INFO[r].description)}">${badge(r)}</span><button type="button" data-count="${r}" data-delta="-1" aria-label="减少${ROLE_INFO[r].name}">−</button><output id="count-${r}">${state.config.roles[r]??0}</output><button type="button" data-count="${r}" data-delta="1" aria-label="增加${ROLE_INFO[r].name}">＋</button></div>`).join('')}</div><details class="role-help"><summary>查看角色技能</summary><dl>${roleKeys.map(r=>`<dt>${badge(r)}</dt><dd>${escape(ROLE_INFO[r].description)}</dd>`).join('')}</dl></details><label class="check-row"><input type="checkbox" id="shuffle-seats"><span>开局随机重排座位</span></label><label class="check-row sheriff-option"><input type="checkbox" id="sheriff-enabled"><span><strong>开启上警</strong><small>首日竞选警长，可选择发言方向并最后发言、放逐票计 1.5 票，可移交警徽。</small></span></label><div class="form-row"><label class="field"><span>房间类型</span><select id="visibility" class="input"><option value="private">私密房间 · 凭房号加入</option><option value="public">公开房间 · 展示在大厅</option></select></label><label class="field"><span>胜利条件</span><select id="victory" class="input"><option value="side">屠边（标准）</option><option value="all">屠城</option></select></label></div><div class="form-row"><label class="field"><span>狼队行动时间</span><select id="night-seconds" class="input"><option value="60">60 秒</option><option value="75" selected>75 秒</option><option value="90">90 秒</option></select></label><label class="field"><span>其它行动时间</span><select id="other-night-seconds" class="input"><option value="30" selected>30 秒</option><option value="40">40 秒</option><option value="50">50 秒</option></select></label></div><div class="form-row"><label class="field"><span>女巫自救</span><select id="witch-self-save" class="input">${Object.entries(selfSaveLabels).map(([value,label])=>`<option value="${value}" ${value==='first'?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>每人发言时限</span><select id="day-seconds" class="input"><option value="60">60 秒</option><option value="90" selected>90 秒</option><option value="120">120 秒</option></select></label></div><p class="small muted">6–18 人，狼王、白狼王各最多 1 人，好人神职可重复选择；狼阵营总人数至少 1 人且少于半数。创建后自动生成不重复的 6 位房号。</p><p class="form-error" id="create-error"></p><button class="btn primary full" type="submit">创建房间</button></form>`);}
+function createModal(){state.config=copy(STANDARD_CONFIG);modal('自选配置开房',`<form id="create-form"><label class="field"><span>房间名称</span><input id="room-name" class="input" value="${escape(state.name)}的房间" maxlength="30" required></label><div class="config-total"><strong>角色配置 · 共 <span id="total-count">12</span> 人</strong><button type="button" class="link-button" data-do="reset-config">恢复标准局</button></div><div class="role-counters">${roleKeys.map(r=>`<div class="counter-item"><span title="${escape(ROLE_INFO[r].description)}">${badge(r)}</span><button type="button" data-count="${r}" data-delta="-1" aria-label="减少${ROLE_INFO[r].name}">−</button><output id="count-${r}">${state.config.roles[r]??0}</output><button type="button" data-count="${r}" data-delta="1" aria-label="增加${ROLE_INFO[r].name}">＋</button></div>`).join('')}</div><details class="role-help"><summary>查看角色技能</summary><dl>${roleKeys.map(r=>`<dt>${badge(r)}</dt><dd>${escape(ROLE_INFO[r].description)}</dd>`).join('')}</dl></details><label class="check-row"><input type="checkbox" id="shuffle-seats"><span>开局随机重排座位</span></label><label class="check-row sheriff-option"><input type="checkbox" id="sheriff-enabled"><span><strong>开启上警</strong><small>首日竞选警长，可选择发言方向并最后发言、放逐票计 1.5 票，可移交警徽。</small></span></label><div class="form-row"><label class="field"><span>房间类型</span><select id="visibility" class="input"><option value="private">私密房间 · 凭房号加入</option><option value="public">公开房间 · 展示在大厅</option></select></label><label class="field"><span>胜利条件</span><select id="victory" class="input"><option value="side">屠边（标准）</option><option value="all">屠城</option></select></label></div><div class="form-row"><label class="field"><span>狼队行动时间</span><select id="night-seconds" class="input"><option value="60">60 秒</option><option value="75" selected>75 秒</option><option value="90">90 秒</option></select></label><label class="field"><span>其它行动时间</span><select id="other-night-seconds" class="input"><option value="30" selected>30 秒</option><option value="40">40 秒</option><option value="50">50 秒</option></select></label></div><div class="form-row"><label class="field"><span>女巫自救</span><select id="witch-self-save" class="input">${Object.entries(selfSaveLabels).map(([value,label])=>`<option value="${value}" ${value==='first'?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>每人发言时限</span><select id="day-seconds" class="input"><option value="60">60 秒</option><option value="90" selected>90 秒</option><option value="120">120 秒</option></select></label></div><p class="small muted">6–18 人，狼王、白狼王及好人神职均可重复选择。狼阵营至少 1 人且少于半数；屠边局至少各有 1 名村民和神职，屠城局可以没有村民。创建后自动生成不重复的 6 位房号。</p><p class="form-error" id="create-error"></p><button class="btn primary full" type="submit">创建房间</button></form>`);}
 function updateCounts(){roleKeys.forEach(r=>{const el=$('#count-'+r);if(el)el.textContent=state.config.roles[r]??0;});if($('#total-count'))$('#total-count').textContent=size(state.config);}
 
 function startDemo(){
@@ -672,6 +696,7 @@ function syncDemo(){
   for(const [obj,key] of [[game,'deadline'],[game,'inactivityDeadline'],[game.action,'deadline']]){
     if(obj?.[key])obj[key]-=demoTimeOffset;
   }
+  for(const stage of game.nightStages||[])stage.deadline-=demoTimeOffset;
   state.room.game=game;
   if(state.demoGame.phase==='finished'&&!state.demoHistory.some(x=>x.code===state.room.code)){state.demoHistory.unshift({code:state.room.code,name:state.room.name,winner:state.demoGame.winner,round:state.demoGame.round,endedAt:Date.now(),demo:true,room:copy(state.room)});}render();}
 function demoTick(){
@@ -701,6 +726,12 @@ document.addEventListener('click',async event=>{
   // This decorative evaluation button must never submit code or a game action.
   if(b.dataset.do==='code-submit'){event.preventDefault();return;}
   if(b.disabled)return;
+  if (b.dataset.do === 'toggle-game-area') {
+    state.gameAreaOpen = !state.gameAreaOpen;
+    render();
+    document.getElementById('toggle-game-area')?.focus({preventScroll:true});
+    return;
+  }
   if (Object.prototype.hasOwnProperty.call(state.sidebar, b.dataset.sidebarToggle)) {
     const key = b.dataset.sidebarToggle;
     state.sidebar[key] = !state.sidebar[key];

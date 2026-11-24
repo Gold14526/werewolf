@@ -48,7 +48,7 @@ test('standard deck has 12 roles and distinct assigned players', () => {
   assert.equal(g.players.length, 12);
   for (const [role, count] of Object.entries(STANDARD_CONFIG.roles)) assert.equal(g.players.filter(p => p.role === role).length, count);
   assert.equal(g.phase, 'night');
-  assert.equal(viewGame(g, id(g, 'villager')).deadline, 166000);
+  assert.equal(viewGame(g, id(g, 'villager')).deadline, 31000);
   assert.equal(viewGame(g, id(g, 'guard')).action.deadline, 31000);
   assert.equal(viewGame(g, id(g, 'wolf')).action, null);
   advance(g, g.deadline);
@@ -178,14 +178,14 @@ test('poison ignores protection and prevents hunter shot', () => {
   assert.equal(viewGame(g, id(g, 'witch')).privateInfo.potions.poison, false);
 });
 
-test('hunter killed at night can shoot and victory waits for that shot', () => {
+test('a nonterminal hunter death can lead to immediate victory when the shot hits the last wolf', () => {
   const g = game();
   night(g, { wolf: id(g, 'hunter') });
   assert.equal(g.phase, 'hunter');
   assert.equal(g.winner, null);
   assert.equal(viewGame(g, id(g, 'hunter')).actionable, true);
   play(g, 'hunter', id(g, 'wolf'));
-  lastwords(g);
+  assert.equal(g.phase, 'finished');
   assert.equal(g.winner, 'good');
 });
 
@@ -323,8 +323,7 @@ test('self votes are rejected and PK limits speakers, voters and targets', () =>
   assert.throws(() => act(g, 'p3', { type: 'vote', targetId: 'p4' }, g.deadline - 1));
   for (const p of g.players.slice(2)) act(g, p.id, { type: 'vote', targetId: 'p1' }, g.deadline - 1);
   advance(g, g.deadline);
-  assert.equal(g.phase, 'lastwords');
-  lastwords(g);
+  assert.equal(g.phase, 'finished');
   assert.equal(g.winner, 'good');
 });
 

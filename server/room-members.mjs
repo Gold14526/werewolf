@@ -1,4 +1,4 @@
-import { advance, isWolfRole, migrateNightConfig, viewGame } from '../web/engine.js';
+import { advance, isPendingDeath, isWolfRole, migrateNightConfig, viewGame } from '../web/engine.js';
 
 const denied = () => Object.assign(new Error('观战时不能进行此操作'), { status: 403 });
 export const capacity = room => Object.values(room.config.roles).reduce((sum, count) => sum + count, 0);
@@ -146,37 +146,45 @@ export function requireSeat(room, id) {
   if (!hasSeat(room, id)) throw denied();
 }
 
-// A dead player's last words, badge and shot survive their move to the gallery.
+// Legacy gallery members can finish a queued shot or badge. Their seat stays
+// released even if an old snapshot is restored while that action is pending.
 export function deathTurn(game, id) {
-  if (!game || !game.players.some(p => p.id === id && !p.alive)) return false;
+  if (!game) return false;
   return (game.phase === 'hunter' && game.pendingHunters[0] === id)
     || (game.phase === 'sheriff_transfer' && game.pendingBadgeId === id)
-    || (game.phase === 'lastwords' && game.currentSpeakerId === id);
+    || (game.phase === 'lastwords' && game.currentSpeakerId === id && game.players.some(p => p.id === id && !p.alive));
 }
 
 export function allowAction(room, id, type) {
-  if (!isWatcher(room, id)) return;
+  const pending = isPendingDeath(room.game, id);
+  if (!pending && !isWatcher(room, id)) return;
   if (deathTurn(room.game, id)) {
     const phase = room.game.phase;
     if (phase === 'lastwords' ? ['pass', 'typing', 'return'].includes(type) : type === phase) return;
   }
+  if (pending) throw Object.assign(new Error('请等待或完成当前出局技能'), { status: 403 });
   throw denied();
 }
 
 export function gameView(game, id, spectator = false) {
-  const member = game.players.some(p => p.id === id);
-  if (member && !spectator) return viewGame(game, id);
+  const member = game.players.find(p => p.id === id);
+  if (member && !spectator && !isPendingDeath(game, id)) return viewGame(game, id);
   const publicView = viewGame(game, null);
-  if (spectator && deathTurn(game, id)) {
+  if (member && !spectator) {
+    publicView.myRole = member.role;
+    publicView.players.find(p => p.id === id).role = member.role;
+  }
+  if (deathTurn(game, id)) {
     const own = viewGame(game, id);
-    for (const key of ['actionable', 'submitted', 'action', 'canSpeak', 'myAfk', 'inactivityDeadline']) publicView[key] = own[key];
+    for (const key of ['phase', 'phaseLabel', 'actionable', 'submitted', 'action', 'canSpeak', 'myAfk', 'inactivityDeadline']) publicView[key] = own[key];
   }
   return publicView;
 }
 
 export function messagesFor(room, id, spectator) {
-  const wolf = isWolfRole(room.game?.players.find(p => p.id === id)?.role);
+  const showWolfChat = !spectator && !isPendingDeath(room.game, id)
+    && (room.game?.phase === 'finished' || isWolfRole(room.game?.players.find(p => p.id === id)?.role));
   // Archived rooms also pass through this projection on their first replay.
   preserveMessageSeats(room);
-  return room.messages.filter(m => m.channel !== 'wolf' || (!spectator && (wolf || room.game?.phase === 'finished')));
+  return room.messages.filter(m => m.channel !== 'wolf' || showWolfChat);
 }

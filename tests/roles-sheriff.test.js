@@ -47,7 +47,8 @@ test('special wolves count toward configuration balance and good specials count 
   assert.throws(() => validateConfig({ roles: { wolf: 1, wolfKing: 1, whiteWolfKing: 1, villager: 2, fool: 1 } }));
   assert.throws(() => validateConfig({ ...ALL, sheriff: 'yes' }));
   assert.equal(validateConfig({ ...ALL, roles: { ...ALL.roles, knight: 2 } }).roles.knight, 2);
-  assert.throws(() => validateConfig({ ...ALL, roles: { ...ALL.roles, whiteWolfKing: 2 } }));
+  assert.equal(validateConfig({ ...ALL, roles: { ...ALL.roles, whiteWolfKing: 2 } }).roles.whiteWolfKing, 2);
+  assert.throws(() => validateConfig({ roles: { wolf: 7, villager: 9 }, victory: 'all' }));
   assert.equal(STANDARD_CONFIG.sheriff, false);
   assert.equal(STANDARD_CONFIG.nightSeconds, 75);
   assert.equal(validateConfig({ roles: { wolfKing: 1, villager: 4, fool: 1 } }).nightSeconds, 75);
@@ -80,9 +81,10 @@ test('a wolfKing-only deck retains night wolf stage and side victory', () => {
   const king = who(g, 'wolfKing'); night(g);
   assert.equal(g.winner, null);
   exile(g, king.id);
-  assert.equal(g.phase, 'hunter');
-  assert.equal(viewGame(g, king.id).phaseLabel, '狼王开枪');
-  send(g, king.id, { type: 'hunter', targetId: null }); speeches(g, 'lastwords');
+  assert.equal(g.phase, 'finished');
+  assert.equal(king.alive, false);
+  assert.equal(viewGame(g, king.id).actionable, false);
+  assert.deepEqual(g.hunterUsed, []);
   assert.equal(g.winner, 'good');
 });
 
@@ -203,11 +205,11 @@ test('sheriff chooses circular order and is last; 1.5 exile vote breaks a one-to
 test('night-killed sheriff transfers badge before last words and new sheriff selects direction', () => {
   const g = game({ ...ALL, sheriff: true }), sheriff = who(g, 'seer'), successor = who(g, 'villager');
   night(g, { wolf: sheriff.id }); signup(g, [sheriff.id]);
-  assert.equal(g.phase, 'sheriff_transfer'); assert.equal(sheriff.alive, false);
+  assert.equal(g.phase, 'sheriff_transfer'); assert.equal(sheriff.alive, true);
   assert.equal(viewGame(g, sheriff.id).actionable, true);
   assertRejectUnchanged(g, successor.id, { type: 'sheriff_transfer', targetId: successor.id });
   send(g, sheriff.id, { type: 'sheriff_transfer', targetId: successor.id });
-  assert.equal(g.sheriffId, successor.id); assert.equal(g.phase, 'lastwords');
+  assert.equal(g.sheriffId, successor.id); assert.equal(g.phase, 'lastwords'); assert.equal(sheriff.alive, false);
   send(g, sheriff.id, { type: 'pass' }); assert.equal(g.phase, 'sheriff_direction');
 });
 
@@ -215,7 +217,8 @@ test('fool sheriff loses badge on flip and dead sheriff timeout tears badge', ()
   const g = game({ ...ALL, sheriff: true }), fool = who(g, 'fool'); singleSheriff(g, fool.id); exile(g, fool.id);
   assert.equal(fool.alive, true); assert.equal(g.sheriffId, null); assert.equal(g.pendingBadgeId, null);
   const dead = game({ ...ALL, sheriff: true }), sheriff = who(dead, 'seer'); night(dead, { wolf: sheriff.id }); signup(dead, [sheriff.id]);
-  assert.equal(dead.phase, 'sheriff_transfer'); advance(dead, dead.deadline);
+  assert.equal(dead.phase, 'sheriff_transfer'); assert.equal(sheriff.alive, true);
+  advance(dead, dead.deadline); assert.equal(sheriff.alive, false);
   assert.equal(dead.pendingBadgeId, null); assert.equal(dead.sheriffId, null); assert.equal(dead.phase, 'lastwords');
 });
 

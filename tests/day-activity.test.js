@@ -38,6 +38,12 @@ test('only genuine speaker input extends the idle clock, with a private 15 secon
   advance(game, newIdle);
   assert.equal(game.currentSpeakerId, next.id);
   assert.equal(viewGame(game, first.id).myAfk, true);
+  for (const observer of [first.id, next.id, null]) {
+    const seat = viewGame(game, observer).players.find(p => p.id === first.id);
+    assert.equal(seat.alive, true);
+    assert.equal(seat.afk, true);
+    assert.equal(seat.publicRole, undefined);
+  }
   assert.throws(() => act(game, first.id, { type: 'typing' }, newIdle + 1));
 });
 
@@ -69,6 +75,7 @@ test('AFK persists through a new round and JSON reload, and return restores norm
   assert.equal(viewGame(game, first).myAfk, true);
   act(game, first, { type: 'return' }, nightEnd + 1000);
   assert.equal(viewGame(game, first).myAfk, false);
+  assert.equal(viewGame(game, null).players.find(p => p.id === first).afk, false);
   assert.equal(game.deadline, nightEnd + 1000 + 90_000);
   assert.equal(viewGame(game, first).inactivityDeadline, nightEnd + 1000 + 60_000);
 });
