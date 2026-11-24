@@ -61,5 +61,5 @@ jobs:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
           NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID || secrets.NEON_PROJECT_ID }}
           NEON_BRANCH: ${{ inputs.neon_branch || vars.NEON_BRANCH_ID || vars.NEON_BRANCH || secrets.NEON_BRANCH_ID || 'production' }}
-          ALLOWED_ORIGINS: https://gold14526.github.io
+          ALLOWED_ORIGINS: https://gold14526.github.io,https://goldwerewolf.com
         run: node scripts/deploy-neon.mjs
