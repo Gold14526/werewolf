@@ -558,10 +558,10 @@ test('the background game disclosure keeps lobby, seats, phase prompts and AFK c
     assert.match(tag,/data-do="toggle-game-area"/);
     assert.match(tag,/aria-controls="game-area-content"/);
     assert.ok(tag.includes('aria-expanded="'+expanded+'"'));
-    assert.doesNotMatch(tag+content,/收起游戏区域|展开游戏区域/);
+    assert.doesNotMatch(tag+content,/游戏区域/);
     const icon=content.match(/<[^/!][^>]*\bclass="[^"]*\blg-callout-info-icon\b[^"]*"[^>]*>/);
     const caret=content.match(/<[^/!][^>]*\bclass="[^"]*\blg-callout-caret\b[^"]*"[^>]*>/);
-    const title=content.match(/(?:^|>)\s*游戏区域\s*(?=<|$)/);
+    const title=content.match(/(?:^|>)\s*题目背景\s*(?=<|$)/);
     assert.ok(icon&&title&&caret,'information icon, visible title, and disclosure caret');
     assert.match(icon[0],/aria-hidden="true"/);
     assert.match(caret[0],/aria-hidden="true"/);

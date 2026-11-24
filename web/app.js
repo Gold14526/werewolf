@@ -118,7 +118,7 @@ function gameArea(room, awayNotice) {
         <circle cx="8" cy="8" r="8" fill="currentColor"/>
         <g fill="white"><circle cx="8" cy="4.9" r="1.1"/><path d="M6.4 7h2.7v3.8h.9V12H6.3v-1.2h.9V8.2h-.8z"/></g>
       </svg>
-      <span>游戏区域</span>
+      <span>题目背景</span>
       <svg class="lg-callout-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
         <path fill="currentColor" d="M6 3.5a1 1 0 0 1 1.7-.7l4.5 4.5a1 1 0 0 1 0 1.4l-4.5 4.5a1 1 0 0 1-1.7-.7z"/>
       </svg>
