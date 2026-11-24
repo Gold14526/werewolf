@@ -134,7 +134,7 @@ test('a badge transferred after a gun chain may be transferred again by its next
   assert.equal(g.phase, 'discussion');
 });
 
-test('failed sheriff knight duel transfers badge and preserves the interrupted speech queue', () => {
+test('a dueling sheriff transfers the badge and the successor speaks last in the unfinished queue', () => {
   const g = game(), knight = role(g, 'knight'), target = role(g, 'villager');
   night(g);
   signup(g, [knight.id]);
@@ -148,7 +148,7 @@ test('failed sheriff knight duel transfers badge and preserves the interrupted s
   submit(g, knight.id, { type: 'sheriff_transfer', targetId: target.id });
   assert.equal(knight.alive, false);
   assert.equal(g.phase, 'discussion');
-  assert.deepEqual(g.speechQueue, queue.filter(id => id !== knight.id));
+  assert.deepEqual(g.speechQueue, [...queue.filter(id => id !== knight.id && id !== target.id), target.id]);
   assert.equal(g.currentSpeakerId, speaker);
   assert.equal(viewGame(g, knight.id).canDuel, false);
 });

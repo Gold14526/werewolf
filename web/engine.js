@@ -143,6 +143,7 @@ function beginNight(game, now) {
   game.runoff = false;
   game.voteTargets = null;
   game.speechQueue = [];
+  game.pausedSpeeches = [];
   game.inactivityDeadline = null;
   game.night = { guards: [], victim: null, poisons: [], saved: false };
   game.actions = Object.create(null);
@@ -323,12 +324,43 @@ function plurality(actions) {
   const targets = leadingTargets(actions);
   return targets.length === 1 ? targets[0] : null;
 }
+
+function dawnDeathSeats(game) {
+  if (Array.isArray(game.night?.publicDeathSeats)) return game.night.publicDeathSeats;
+  // A pre-upgrade room may be in last words or badge transfer. Only recover
+  // seats from public announcements. A saved or guarded target is not a death.
+  const entries = game.log.filter(entry => entry.round === game.round);
+  const dawn = entries.findIndex(entry => entry.text.startsWith('天亮了，昨夜'));
+  if (dawn < 0) return null;
+  const text = entries[dawn].text;
+  if (text !== '天亮了，昨夜是平安夜。') {
+    const report = /^天亮了，昨夜 (.+)。$/.exec(text);
+    if (!report || !report[1].split('，').every(part => /^\d+(?:、\d+)* 号玩家(?:出局|遇袭|等待出局结算)$/.test(part))) return null;
+  }
+  const seats = new Set((text.match(/\d+/g) ?? []).map(Number));
+  for (const entry of entries.slice(dawn + 1)) {
+    const hit = /^(?:\d+ 号(?:猎人|狼王)开枪击中 (\d+) 号 玩家|(?:猎人|狼王)带走了 (\d+) 号玩家)。$/.exec(entry.text);
+    if (hit) seats.add(Number(hit[1] ?? hit[2]));
+  }
+  return [...seats];
+}
+
+function speakersAfter(speakers, seat, direction = 'right') {
+  const ordered = speakers.sort((a, b) => a.seat - b.seat);
+  if (direction === 'left') ordered.reverse();
+  const next = seat == null ? 0 : ordered.findIndex(p => direction === 'left' ? p.seat < seat : p.seat > seat);
+  return (next > 0 ? [...ordered.slice(next), ...ordered.slice(0, next)] : ordered).map(p => p.id);
+}
+
 function beginDiscussion(game, now, ids = null) {
-  if (!ids && player(game, game.sheriffId)?.alive) {
+  game.pausedSpeeches = [];
+  if (!ids && isStanding(game, player(game, game.sheriffId))) {
     setPhase(game, 'sheriff_direction', now);
     return;
   }
-  startDiscussion(game, now, (ids ? ids.map(id => player(game, id)).filter(p => p?.alive) : live(game)).sort((a, b) => a.seat - b.seat).map(p => p.id));
+  const deaths = ids ? null : dawnDeathSeats(game);
+  const speakers = ids ? live(game).filter(p => ids.includes(p.id)) : live(game);
+  startDiscussion(game, now, speakersAfter(speakers, deaths?.length ? Math.min(...deaths) : null));
 }
 function startSpeech(game, phase, id, now) {
   setPhase(game, phase, now);
@@ -337,6 +369,14 @@ function startSpeech(game, phase, id, now) {
     game.deadline = now + AFK_SPEECH_MS;
   } else {
     game.inactivityDeadline = now + INACTIVITY_MS;
+  }
+  const paused = phase === 'discussion' && game.pausedSpeeches?.find(turn => turn.id === id);
+  if (paused) {
+    game.pausedSpeeches = game.pausedSpeeches.filter(turn => turn.id !== id);
+    if (paused.afk === Boolean(player(game, id)?.afk)) {
+      game.deadline = now + paused.remaining;
+      game.inactivityDeadline = paused.idleRemaining == null ? null : now + paused.idleRemaining;
+    }
   }
 }
 
@@ -432,8 +472,11 @@ function finishOrResume(game, resume, now) {
     startSpeech(game, 'lastwords', game.lastWordsQueue[0], now);
     return;
   }
-  if (resume?.type === 'discussion') startDiscussion(game, now, resume.queue);
-  else if (resume === 'discussion') beginDiscussion(game, now);
+  if (resume?.type === 'discussion') {
+    let queue = resume.queue;
+    if (resume.transferBadge && queue.includes(game.sheriffId)) queue = [...queue.filter(id => id !== game.sheriffId), game.sheriffId];
+    startDiscussion(game, now, queue);
+  } else if (resume === 'discussion') beginDiscussion(game, now);
   else {
     // Preserve any pointer left in a pre-audit snapshot before replacing game.night.
     preserveLegacyWolfAttack(game, now);
@@ -469,6 +512,7 @@ function resolveNight(game, now, resume = 'discussion') {
   if (out.length) reports.push(`${out.join('、')} 号玩家出局`);
   if (waiting.length) reports.push(`${waiting.join('、')} 号玩家遇袭`);
   addLog(game, reports.length ? `天亮了，昨夜 ${reports.join('，')}。` : '天亮了，昨夜是平安夜。', now);
+  game.night.publicDeathSeats = casualties.map(p => p.seat);
   finishOrResume(game, resume, now);
 }
 function checkWinner(game, now, includeAfkDraw = true) {
@@ -572,10 +616,7 @@ function finishPhase(game, now) {
     const resume = game.resume; game.resume = null; finishOrResume(game, resume, now); return;
   } else if (phase === 'sheriff_direction') {
     const choice = game.actions[game.sheriffId]?.choice ?? 'right';
-    const ordered = live(game).sort((a, b) => a.seat - b.seat);
-    if (choice === 'left') ordered.reverse();
-    const index = ordered.findIndex(p => p.id === game.sheriffId);
-    const queue = [...ordered.slice(index + 1), ...ordered.slice(0, index + 1)].map(p => p.id);
+    const queue = speakersAfter(live(game), player(game, game.sheriffId)?.seat, choice);
     addLog(game, `警长选择${choice === 'left' ? '逆座位号' : '顺座位号'}方向发言，警长最后发言。`, now);
     startDiscussion(game, now, queue); return;
   } else if (phase === 'discussion') {
@@ -625,6 +666,10 @@ function finishPhase(game, now) {
     game.hunterUsed.push(id);
     if (targetId && targetId !== id && eliminate(game, targetId, 'shot')) {
       shooter.revealed = true;
+      if (game.resume === 'discussion') {
+        const seats = dawnDeathSeats(game);
+        if (seats) game.night.publicDeathSeats = [...seats, player(game, targetId).seat];
+      }
       if ((game.resume === 'discussion' && game.round === 1) || game.resume === 'night') game.lastWordsQueue.push(targetId);
       addLog(game, `${shooter.seat} 号${roleName}开枪击中 ${targetLabel(game, targetId)} 玩家。`, now);
     } else {
@@ -733,7 +778,16 @@ export function act(game, playerId, action, now = Date.now()) {
       game.speechQueue = []; game.lastWordsQueue = [];
       finishOrResume(game, 'night', now);
     } else {
-      const resume = { type: 'discussion', queue: game.speechQueue.filter(id => id !== actor.id) };
+      let queue = game.speechQueue.filter(id => id !== actor.id);
+      if (!game.sheriffId) {
+        queue = speakersAfter(live(game).filter(p => queue.includes(p.id)), actor.seat);
+      }
+      if (queue.includes(game.currentSpeakerId)) {
+        const speaker = player(game, game.currentSpeakerId);
+        (game.pausedSpeeches ??= []).push({ id: speaker.id, afk: Boolean(speaker.afk), remaining: game.deadline - now,
+          idleRemaining: game.inactivityDeadline == null ? null : game.inactivityDeadline - now });
+      }
+      const resume = { type: 'discussion', queue, transferBadge: game.sheriffId === actor.id };
       eliminate(game, actor.id, 'duel');
       addLog(game, `${actor.seat} 号骑士决斗 ${target.seat} 号，目标是好人，骑士按决斗规则退场，结算后继续发言。`, now);
       finishOrResume(game, resume, now);

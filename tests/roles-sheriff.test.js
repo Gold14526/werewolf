@@ -133,13 +133,68 @@ test('knight duel of wolfKing suppresses gun, enters night, and cannot be reused
   assertRejectUnchanged(g, knight.id, { type: 'duel', targetId: who(g, 'wolf').id });
 });
 
-test('failed knight duel preserves interrupted speech and removes dead knight from its queue', () => {
-  const g = game(); night(g); const knight = who(g, 'knight'), target = who(g, 'villager');
-  const speaker = g.currentSpeakerId, before = [...g.speechQueue];
-  send(g, knight.id, { type: 'duel', targetId: target.id });
-  assert.equal(knight.alive, false); assert.equal(target.alive, true); assert.equal(g.phase, 'discussion'); assert.equal(g.currentSpeakerId, speaker);
-  assert.deepEqual(g.speechQueue, before.filter(id => id !== knight.id));
+test('a failed duel without a sheriff resumes beside the knight and pauses an interrupted speaker’s clocks', () => {
+  let g = game(); night(g);
+  const knight = who(g, 'knight'), target = who(g, 'villager');
+  const completed = g.currentSpeakerId;
+  send(g, completed, { type: 'pass' });
+  const interrupted = g.currentSpeakerId;
+  const when = g.deadline - 12000;
+  act(g, interrupted, { type: 'typing' }, when - 9000);
+  const idleLeft = g.inactivityDeadline - when;
+  const expected = [...g.speechQueue.slice(g.speechQueue.indexOf(knight.id) + 1), ...g.speechQueue.slice(0, g.speechQueue.indexOf(knight.id))];
+  act(g, knight.id, { type: 'duel', targetId: target.id }, when);
+  assert.equal(knight.alive, false); assert.equal(target.alive, true);
+  assert.deepEqual(g.speechQueue, expected);
+  assert.ok(!expected.includes(completed));
+  assert.notEqual(g.currentSpeakerId, interrupted);
+  g = JSON.parse(JSON.stringify(g));
+  let resumed;
+  while (g.currentSpeakerId !== interrupted) {
+    resumed = g.deadline - 5000;
+    act(g, g.currentSpeakerId, { type: 'pass' }, resumed);
+  }
+  assert.equal(g.deadline, resumed + 12000);
+  assert.equal(g.inactivityDeadline, resumed + idleLeft);
   assert.equal(g.round, 1);
+});
+
+test('a failed duel with a sheriff keeps the unfinished queue, current timers and sheriff last', () => {
+  const g = game({ ...ALL, sheriff: true });
+  const sheriff = who(g, 'seer'), knight = who(g, 'knight'), target = who(g, 'villager');
+  singleSheriff(g, sheriff.id);
+  send(g, sheriff.id, { type: 'sheriff_direction', choice: 'left' });
+  send(g, g.currentSpeakerId, { type: 'pass' });
+  const speaker = g.currentSpeakerId, deadline = g.deadline, idle = g.inactivityDeadline;
+  const expected = g.speechQueue.filter(id => id !== knight.id);
+  act(g, knight.id, { type: 'duel', targetId: target.id }, deadline - 10000);
+  assert.equal(g.currentSpeakerId, speaker);
+  assert.deepEqual(g.speechQueue, expected);
+  assert.equal(expected.at(-1), sheriff.id);
+  assert.equal(g.deadline, deadline);
+  assert.equal(g.inactivityDeadline, idle);
+});
+
+test('a dueling sheriff can transfer the badge without repeating a completed or interrupted speech', () => {
+  const g = game({ ...ALL, sheriff: true }), knight = who(g, 'knight'), target = who(g, 'villager');
+  singleSheriff(g, knight.id);
+  send(g, knight.id, { type: 'sheriff_direction', choice: 'right' });
+  const completed = g.currentSpeakerId;
+  send(g, completed, { type: 'pass' });
+  const successor = g.currentSpeakerId, when = g.deadline - 14000;
+  const queue = g.speechQueue.filter(id => id !== knight.id && id !== successor);
+  act(g, knight.id, { type: 'duel', targetId: target.id }, when);
+  assert.equal(g.phase, 'sheriff_transfer');
+  send(g, knight.id, { type: 'sheriff_transfer', targetId: successor });
+  assert.deepEqual(g.speechQueue, [...queue, successor]);
+  assert.ok(!g.speechQueue.includes(completed));
+  let resumed;
+  for (const id of queue) {
+    resumed = g.deadline - 1000;
+    act(g, id, { type: 'pass' }, resumed);
+  }
+  assert.equal(g.currentSpeakerId, successor);
+  assert.equal(g.deadline, resumed + 14000);
 });
 
 test('signup keeps pending first-night death secret, candidates speak and original off-police voters elect', () => {
